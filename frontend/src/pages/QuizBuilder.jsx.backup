@@ -1,0 +1,175 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Plus, Trash2, Save } from 'lucide-react'
+
+function QuizBuilder() {
+  const navigate = useNavigate()
+  const [quiz, setQuiz] = useState({
+    title: '',
+    description: '',
+    timeLimit: 600,
+    questions: []
+  })
+
+  const addQuestion = () => {
+    setQuiz(prev => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        {
+          id: Date.now(),
+          questionText: '',
+          questionType: 'multiple_choice',
+          options: ['', '', '', ''],
+          correctAnswer: '',
+          points: 1
+        }
+      ]
+    }))
+  }
+
+  const updateQuestion = (questionId, field, value) => {
+    setQuiz(prev => ({
+      ...prev,
+      questions: prev.questions.map(q => 
+        q.id === questionId ? { ...q, [field]: value } : q
+      )
+    }))
+  }
+
+  const removeQuestion = (questionId) => {
+    setQuiz(prev => ({
+      ...prev,
+      questions: prev.questions.filter(q => q.id !== questionId)
+    }))
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white shadow">
+        <div className="container mx-auto px-4 py-6 flex justify-between items-center">
+          <h1 className="text-3xl font-bold text-gray-900">Quiz Builder</h1>
+          <div className="space-x-4">
+            <button 
+              onClick={() => navigate('/admin')}
+              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2">
+              <Save className="w-4 h-4" />
+              Save Quiz
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="container mx-auto px-4 py-8">
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h2 className="text-xl font-semibold mb-4">Quiz Details</h2>
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Quiz Title</label>
+              <input 
+                type="text" 
+                value={quiz.title}
+                onChange={(e) => setQuiz(prev => ({ ...prev, title: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Enter quiz title..."
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Time Limit (minutes)</label>
+              <input 
+                type="number" 
+                value={quiz.timeLimit / 60}
+                onChange={(e) => setQuiz(prev => ({ ...prev, timeLimit: e.target.value * 60 }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+            <textarea 
+              value={quiz.description}
+              onChange={(e) => setQuiz(prev => ({ ...prev, description: e.target.value }))}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Quiz description..."
+            />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-semibold">Questions</h2>
+            <button 
+              onClick={addQuestion}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Add Question
+            </button>
+          </div>
+
+          {quiz.questions.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">No questions added yet. Click "Add Question" to get started.</p>
+          ) : (
+            <div className="space-y-6">
+              {quiz.questions.map((question, index) => (
+                <div key={question.id} className="border border-gray-200 rounded-lg p-4">
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="font-semibold">Question {index + 1}</h3>
+                    <button 
+                      onClick={() => removeQuestion(question.id)}
+                      className="text-red-600 hover:text-red-700"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <input 
+                      type="text" 
+                      value={question.questionText}
+                      onChange={(e) => updateQuestion(question.id, 'questionText', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Enter your question..."
+                    />
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      {question.options.map((option, optionIndex) => (
+                        <div key={optionIndex} className="flex items-center gap-2">
+                          <input 
+                            type="radio" 
+                            name={`correct-${question.id}`}
+                            checked={question.correctAnswer === option}
+                            onChange={() => updateQuestion(question.id, 'correctAnswer', option)}
+                            className="text-green-600"
+                          />
+                          <input 
+                            type="text" 
+                            value={option}
+                            onChange={(e) => {
+                              const newOptions = [...question.options]
+                              newOptions[optionIndex] = e.target.value
+                              updateQuestion(question.id, 'options', newOptions)
+                            }}
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder={`Option ${optionIndex + 1}...`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+export default QuizBuilder
