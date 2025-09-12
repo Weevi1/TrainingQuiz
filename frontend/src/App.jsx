@@ -9,7 +9,7 @@ import Results from './pages/Results'
 
 function App() {
   return (
-    <Router>
+    <Router basename="/TrainingQuiz">
       <div className="min-h-screen bg-gb-navy">
         <Routes>
           <Route path="/" element={<Home />} />
