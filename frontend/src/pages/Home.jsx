@@ -28,10 +28,10 @@ function Home() {
                 Create and manage quizzes, track participant progress, and view detailed analytics
               </p>
               <Link 
-                to="/admin" 
+                to="/login" 
                 className="bg-gb-gold text-gb-navy px-6 py-3 rounded-lg hover:bg-gb-gold-light transition-colors inline-block font-medium"
               >
-                Admin Dashboard
+                Admin Login
               </Link>
             </div>
           </div>

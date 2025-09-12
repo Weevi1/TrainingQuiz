@@ -1,365 +1,27 @@
-import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import QRCode from 'react-qr-code'
-import { Users, Clock, Play, Square, Trophy, Zap, Star, Target, Award, X, ArrowLeft } from 'lucide-react'
-import { supabase } from '../lib/supabase'
-import { gameShowSounds } from '../lib/gameShowSounds'
+import { Users, Clock, Play, Square, Trophy, Target, X, ArrowLeft } from 'lucide-react'
 
-function QuizSession() {
-  const { sessionId } = useParams()
-  const navigate = useNavigate()
-  const [session, setSession] = useState(null)
-  const [participants, setParticipants] = useState([])
-  const [liveResults, setLiveResults] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    loadSessionData()
-    
-    // Subscribe to real-time participant updates
-    console.log('🔔 Setting up real-time subscriptions for sessionId:', sessionId)
-    const participantSubscription = supabase
-      .channel(`participants-${sessionId}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'participants',
-        filter: `session_id=eq.${sessionId}`,
-      }, (payload) => {
-        console.log('🔥 REAL-TIME: Participant change received!', payload)
-        console.log('🔄 Refreshing participants list...')
-        loadParticipants()
-      })
-      .subscribe((status) => {
-        console.log('📡 Participant subscription status:', status)
-      })
-
-    // Subscribe to real-time session status updates
-    const sessionSubscription = supabase
-      .channel(`session-${sessionId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'quiz_sessions',
-        filter: `id=eq.${sessionId}`,
-      }, (payload) => {
-        console.log('🔥 REAL-TIME: Session status changed!', payload)
-        const newSession = payload.new
-        setSession(prev => {
-          if (prev) {
-            console.log(`🔄 Real-time session update: ${prev.status} → ${newSession.status}`)
-            return {
-              ...prev,
-              status: newSession.status,
-              started_at: newSession.started_at || prev.started_at,
-              ended_at: newSession.ended_at || prev.ended_at
-            }
-          }
-          return prev
-        })
-        
-        // Start loading live results if session becomes active
-        if (newSession.status === 'active') {
-          console.log('📊 Session is now active - starting live results...')
-          setTimeout(loadLiveResults, 1000)
-        }
-      })
-      .subscribe((status) => {
-        console.log('📡 Session subscription status:', status)
-      })
-
-    // Also set up a polling backup every 2 seconds for responsive updates
-    const pollingInterval = setInterval(async () => {
-      console.log('⚡ Polling for participant updates...')
-      loadParticipants()
-      
-      // Re-check session status from database to get current state
-      try {
-        const { data: currentSession } = await supabase
-          .from('quiz_sessions')
-          .select('status, started_at, ended_at')
-          .eq('id', sessionId)
-          .single()
-        
-        if (currentSession) {
-          // Update local session state if status changed
-          setSession(prev => {
-            if (prev && prev.status !== currentSession.status) {
-              console.log(`🔄 Session status changed: ${prev.status} → ${currentSession.status}`)
-              return {
-                ...prev,
-                status: currentSession.status,
-                started_at: currentSession.started_at || prev.started_at,
-                ended_at: currentSession.ended_at || prev.ended_at
-              }
-            }
-            return prev
-          })
-          
-          if (currentSession.status === 'active') {
-            console.log('📊 Session is active - loading live results...')
-            loadLiveResults()
-          }
-        }
-      } catch (error) {
-        console.log('Error checking session status:', error)
-      }
-    }, 2000)
-
-    return () => {
-      console.log('🧹 Cleaning up subscriptions...')
-      supabase.removeChannel(participantSubscription)
-      supabase.removeChannel(sessionSubscription)
-      clearInterval(pollingInterval)
-    }
-  }, [sessionId])
-
-  const loadSessionData = async () => {
-    console.log('🔄 LOADING SESSION DATA for sessionId:', sessionId)
-    try {
-      // Get session with quiz data
-      const { data: sessionData, error: sessionError } = await supabase
-        .from('quiz_sessions')
-        .select(`
-          *,
-          quizzes (
-            id,
-            title,
-            description,
-            time_limit,
-            questions (*)
-          )
-        `)
-        .eq('id', sessionId)
-        .single()
-
-      if (sessionError) {
-        console.error('❌ SESSION ERROR:', sessionError)
-        throw sessionError
-      }
-
-      console.log('✅ SESSION LOADED:', sessionData)
-      setSession(sessionData)
-      await loadParticipants()
-    } catch (error) {
-      console.error('💥 Error loading session data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadParticipants = async () => {
-    console.log('👥 LOADING PARTICIPANTS for sessionId:', sessionId)
-    try {
-      const { data: participantData, error } = await supabase
-        .from('participants')
-        .select('*')
-        .eq('session_id', sessionId)
-        .order('joined_at', { ascending: true })
-
-      if (error) {
-        console.error('❌ PARTICIPANT ERROR:', error)
-        throw error
-      }
-
-      console.log('📊 PARTICIPANTS FOUND:', participantData?.length || 0)
-      console.log('👤 PARTICIPANT DATA:', participantData)
-      setParticipants(participantData || [])
-    } catch (error) {
-      console.error('💥 Error loading participants:', error)
-    }
-  }
-
-  const kickParticipant = async (participantId, participantName) => {
-    if (!confirm(`Are you sure you want to remove ${participantName} from the quiz?`)) {
-      return
-    }
-
-    try {
-      // Delete the participant from the database
-      const { error } = await supabase
-        .from('participants')
-        .delete()
-        .eq('id', participantId)
-
-      if (error) {
-        console.error('❌ Error kicking participant:', error)
-        alert('Failed to remove participant. Please try again.')
-        return
-      }
-
-      console.log('✅ Participant kicked successfully:', participantName)
-      // The real-time subscription will automatically update the participant list
-    } catch (error) {
-      console.error('💥 Error kicking participant:', error)
-      alert('Failed to remove participant. Please try again.')
-    }
-  }
-
-  const loadLiveResults = async () => {
-    console.log('📊 LOADING LIVE RESULTS for sessionId:', sessionId)
-    try {
-      // Get all participant answers with participant info
-      const { data: answersData, error } = await supabase
-        .from('participant_answers')
-        .select(`
-          *,
-          participants!inner (
-            id,
-            name,
-            session_id
-          ),
-          questions!inner (
-            id,
-            points
-          )
-        `)
-        .eq('participants.session_id', sessionId)
-
-      if (error) {
-        console.error('❌ LIVE RESULTS ERROR:', error)
-        throw error
-      }
-
-      console.log('📈 RAW ANSWERS DATA:', answersData)
-
-      // Calculate live leaderboard
-      const participantStats = {}
-      
-      answersData?.forEach(answer => {
-        const participantId = answer.participants.id
-        const participantName = answer.participants.name
-        
-        if (!participantStats[participantId]) {
-          participantStats[participantId] = {
-            id: participantId,
-            name: participantName,
-            score: 0,
-            correct: 0,
-            total: 0,
-            avgTime: 0,
-            totalTime: 0
-          }
-        }
-        
-        participantStats[participantId].total++
-        participantStats[participantId].totalTime += answer.time_taken || 0
-        
-        if (answer.is_correct) {
-          participantStats[participantId].correct++
-          participantStats[participantId].score += answer.questions.points || 1
-        }
-      })
-
-      // Convert to array and calculate percentages
-      const leaderboard = Object.values(participantStats).map(participant => ({
-        ...participant,
-        percentage: participant.total > 0 ? Math.round((participant.correct / participant.total) * 100) : 0,
-        avgTime: participant.total > 0 ? Math.round(participant.totalTime / participant.total) : 0
-      })).sort((a, b) => {
-        // Sort by score first, then by avg time (faster is better)
-        if (b.score !== a.score) return b.score - a.score
-        return a.avgTime - b.avgTime
-      })
-
-      console.log('🏆 LIVE LEADERBOARD:', leaderboard)
-      setLiveResults(leaderboard)
-    } catch (error) {
-      console.error('💥 Error loading live results:', error)
-    }
-  }
-
-  const startSession = async () => {
-    try {
-      const { error } = await supabase
-        .from('quiz_sessions')
-        .update({ 
-          status: 'active',
-          started_at: new Date().toISOString()
-        })
-        .eq('id', sessionId)
-
-      if (error) throw error
-
-      // 🎵 SHOW START FANFARE!
-      gameShowSounds.playShowStart()
-
-      setSession(prev => ({ 
-        ...prev, 
-        status: 'active',
-        started_at: new Date().toISOString()
-      }))
-
-      // Start loading live results immediately
-      setTimeout(loadLiveResults, 1000)
-    } catch (error) {
-      console.error('Error starting session:', error)
-      alert('Error starting session. Please try again.')
-    }
-  }
-
-  const stopSession = async () => {
-    try {
-      const { error } = await supabase
-        .from('quiz_sessions')
-        .update({ 
-          status: 'completed',
-          ended_at: new Date().toISOString()
-        })
-        .eq('id', sessionId)
-
-      if (error) throw error
-
-      // 🎵 QUIZ COMPLETE VICTORY SOUND!
-      gameShowSounds.playQuizComplete()
-
-      setSession(prev => ({ 
-        ...prev, 
-        status: 'completed',
-        ended_at: new Date().toISOString()
-      }))
-
-      // Show confirmation and redirect to results
-      setTimeout(() => {
-        navigate(`/results/${sessionId}`)
-      }, 2000)
-    } catch (error) {
-      console.error('Error stopping session:', error)
-      alert('Error stopping session. Please try again.')
-    }
-  }
-
-  const viewResults = () => {
-    navigate(`/results/${sessionId}`)
-  }
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
-          <p className="mt-4 text-gray-600">Loading session...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!session) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Session not found</h1>
-          <p className="text-gray-600">The quiz session you're looking for doesn't exist.</p>
-        </div>
-      </div>
-    )
-  }
-
-  const sessionUrl = `${window.location.origin}/quiz/${session.session_code}`
+// Standalone QuizSession component for Storybook (no router dependencies)
+function QuizSessionDemo({ 
+  sessionStatus = 'waiting',
+  quizTitle = 'Employment Law Fundamentals',
+  participants = [],
+  liveResults = [],
+  sessionCode = 'ABC123',
+  timeLimit = 1800,
+  questionCount = 10
+}) {
+  const [status, setStatus] = useState(sessionStatus)
   
-  // Debug the QR code URL
-  console.log('🔗 QR Code URL:', sessionUrl)
-  console.log('🌐 Current origin:', window.location.origin)
+  const sessionUrl = `${window.location.origin}/quiz/${sessionCode}`
+
+  const startSession = () => setStatus('active')
+  const stopSession = () => setStatus('completed')
+  const viewResults = () => console.log('Navigate to results')
+  const navigateBack = () => console.log('Navigate back')
+  const kickParticipant = (id, name) => console.log(`Kick participant: ${name}`)
+  const loadParticipants = () => console.log('Refresh participants')
 
   return (
     <div className="w-screen h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 relative overflow-hidden flex flex-col">
@@ -372,16 +34,14 @@ function QuizSession() {
         <div className="w-full px-4 py-2 h-full">
           <div className="flex justify-between items-center h-full">
             <div className="flex items-center gap-4">
-              {/* Back Button - Only available before quiz starts */}
               <button
-                onClick={() => navigate('/admin')}
-                disabled={session?.status === 'active' || session?.status === 'completed'}
+                onClick={navigateBack}
+                disabled={status === 'active' || status === 'completed'}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all ${
-                  session?.status === 'active' || session?.status === 'completed'
+                  status === 'active' || status === 'completed'
                     ? 'text-gb-gold/30 cursor-not-allowed'
                     : 'text-gb-gold hover:bg-gb-gold/20 hover:text-white'
                 }`}
-                title={session?.status === 'active' || session?.status === 'completed' ? 'Cannot go back during active quiz' : 'Back to Dashboard'}
               >
                 <ArrowLeft className="w-5 h-5" />
                 <span className="hidden sm:inline">Back</span>
@@ -389,22 +49,22 @@ function QuizSession() {
               <img src="/gbname.png" alt="GB Logo" className="h-8" />
               <div>
                 <h1 className="text-xl font-bold text-gb-gold drop-shadow-lg font-serif">
-                  {session.quizzes.title}
+                  {quizTitle}
                 </h1>
                 <p className="text-gb-gold/80 text-sm font-medium">Live Training Quiz</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <div className={`px-3 py-2 rounded-lg text-sm font-semibold tracking-wide shadow-lg transition-all ${
-                session.status === 'waiting' ? 'bg-gb-gold text-gb-navy' :
-                session.status === 'active' ? 'bg-green-600 text-white animate-pulse' :
+                status === 'waiting' ? 'bg-gb-gold text-gb-navy' :
+                status === 'active' ? 'bg-green-600 text-white animate-pulse' :
                 'bg-gray-600 text-white'
               }`}>
-                {session.status === 'waiting' && 'Ready to Start'}
-                {session.status === 'active' && '● LIVE'}
-                {session.status === 'completed' && '✓ Completed'}
+                {status === 'waiting' && 'Ready to Start'}
+                {status === 'active' && '● LIVE'}
+                {status === 'completed' && '✓ Completed'}
               </div>
-              {session.status === 'waiting' && (
+              {status === 'waiting' && (
                 <button 
                   onClick={startSession}
                   className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg font-bold hover:bg-gb-gold-light flex items-center gap-2 shadow-lg transition-all"
@@ -413,7 +73,7 @@ function QuizSession() {
                   Start Quiz
                 </button>
               )}
-              {session.status === 'active' && (
+              {status === 'active' && (
                 <button 
                   onClick={stopSession}
                   className="bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 flex items-center gap-2 shadow-lg transition-all"
@@ -422,7 +82,7 @@ function QuizSession() {
                   End Quiz
                 </button>
               )}
-              {session.status === 'completed' && (
+              {status === 'completed' && (
                 <button 
                   onClick={viewResults}
                   className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg font-bold hover:bg-gb-gold-light flex items-center gap-2 shadow-lg transition-all"
@@ -439,9 +99,9 @@ function QuizSession() {
       <main className="relative z-10 flex-1 px-4 py-2 overflow-hidden" style={{ height: 'calc(100vh - 5rem)' }}>
         <div className="grid grid-cols-4 gap-3 h-full">
           <div className="col-span-3 flex flex-col gap-3 h-full">
-            {/* Participants Section - Professional V2 */}
+            {/* Participants Section */}
             <div className={`bg-gb-navy/95 backdrop-blur-sm rounded-xl shadow-2xl p-4 border-2 border-gb-gold flex flex-col ${
-              session.status === 'active' ? 'h-1/2' : 'h-full'
+              status === 'active' ? 'h-1/2' : 'h-full'
             } overflow-hidden`}>
               <div className="flex justify-between items-center mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2">
@@ -513,8 +173,8 @@ function QuizSession() {
               </div>
             </div>
 
-            {/* Live Results Section - Professional V2 */}
-            {session.status === 'active' && (
+            {/* Live Results Section */}
+            {status === 'active' && (
               <div className="bg-gb-navy/95 backdrop-blur-sm rounded-xl shadow-2xl p-4 border-2 border-gb-gold flex flex-col h-1/2 overflow-hidden">
                 <div className="flex items-center justify-between mb-2 flex-shrink-0">
                   <div className="flex items-center gap-2">
@@ -546,7 +206,7 @@ function QuizSession() {
                       </div>
                       <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
                         <div className="text-sm font-bold text-gb-gold">
-                          {liveResults.length > 0 ? Math.max(...liveResults.map(p => p.total)) : 0}/{session.quizzes.questions?.length || 0}
+                          {liveResults.length > 0 ? Math.max(...liveResults.map(p => p.total)) : 0}/{questionCount}
                         </div>
                         <div className="text-white font-medium text-xs">Progress</div>
                       </div>
@@ -648,7 +308,7 @@ function QuizSession() {
                 <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
                   <div className="flex justify-between items-center">
                     <span className="text-white font-medium text-xs">Duration</span>
-                    <span className="text-gb-gold font-bold text-sm">{Math.floor(session.quizzes.time_limit / 60)} min</span>
+                    <span className="text-gb-gold font-bold text-sm">{Math.floor(timeLimit / 60)} min</span>
                   </div>
                 </div>
                 
@@ -656,13 +316,13 @@ function QuizSession() {
                   <div className="flex justify-between items-center">
                     <span className="text-white font-medium text-xs">Status</span>
                     <span className={`font-bold text-xs uppercase px-2 py-1 rounded-full ${
-                      session.status === 'waiting' ? 'text-yellow-800 bg-yellow-300' :
-                      session.status === 'active' ? 'text-green-800 bg-green-300 animate-pulse' :
+                      status === 'waiting' ? 'text-yellow-800 bg-yellow-300' :
+                      status === 'active' ? 'text-green-800 bg-green-300 animate-pulse' :
                       'text-purple-800 bg-purple-300'
                     }`}>
-                      {session.status === 'waiting' && 'Preparing'}
-                      {session.status === 'active' && 'Active'}
-                      {session.status === 'completed' && 'Complete'}
+                      {status === 'waiting' && 'Preparing'}
+                      {status === 'active' && 'Active'}
+                      {status === 'completed' && 'Complete'}
                     </span>
                   </div>
                 </div>
@@ -670,11 +330,10 @@ function QuizSession() {
                 <div className="bg-gb-gold/10 rounded-lg p-2 border-2 border-gb-gold/30">
                   <div className="flex justify-between items-center">
                     <span className="text-white font-bold text-xs">Questions</span>
-                    <span className="text-gb-gold font-bold text-lg">{session.quizzes.questions?.length || 0}</span>
+                    <span className="text-gb-gold font-bold text-lg">{questionCount}</span>
                   </div>
                   <div className="text-xs text-gb-gold/80 mt-1">Training Assessment Points</div>
                 </div>
-                
               </div>
             </div>
           </div>
@@ -684,4 +343,4 @@ function QuizSession() {
   )
 }
 
-export default QuizSession
+export default QuizSessionDemo

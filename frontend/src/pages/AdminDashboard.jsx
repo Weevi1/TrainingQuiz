@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Play, BarChart, Settings, Edit } from 'lucide-react'
+import { Plus, Play, BarChart, Settings, Edit, Clock, LogOut } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 
 function AdminDashboard() {
   const navigate = useNavigate()
+  const { user, trainer, signOut } = useAuth()
   const [recentQuizzes, setRecentQuizzes] = useState([])
   const [loading, setLoading] = useState(true)
   const [showQuizModal, setShowQuizModal] = useState(false)
@@ -17,13 +19,13 @@ function AdminDashboard() {
 
   const loadDashboardData = async () => {
     try {
-      const dummyTrainerId = '00000000-0000-0000-0000-000000000001'
+      if (!user) return
       
       // Get recent quizzes
       const { data: quizzes } = await supabase
         .from('quizzes')
         .select('*')
-        .eq('trainer_id', dummyTrainerId)
+        .eq('trainer_id', user.id)
         .order('created_at', { ascending: false })
         .limit(3)
 
@@ -31,7 +33,7 @@ function AdminDashboard() {
       const { data: allQuizzesData } = await supabase
         .from('quizzes')
         .select('*')
-        .eq('trainer_id', dummyTrainerId)
+        .eq('trainer_id', user.id)
         .order('created_at', { ascending: false })
 
       setRecentQuizzes(quizzes || [])
@@ -68,7 +70,7 @@ function AdminDashboard() {
         return
       }
 
-      const dummyTrainerId = '00000000-0000-0000-0000-000000000001'
+      if (!user) return
       
       // Try to generate a unique session code (with retry logic)
       let sessionCode = generateSessionCode()
@@ -100,7 +102,7 @@ function AdminDashboard() {
         .from('quiz_sessions')
         .insert({
           quiz_id: selectedQuiz.id,
-          trainer_id: dummyTrainerId,
+          trainer_id: user.id,
           session_code: sessionCode,
           status: 'waiting'
         })
@@ -119,6 +121,13 @@ function AdminDashboard() {
     }
   }
 
+  const handleSignOut = async () => {
+    const { error } = await signOut()
+    if (!error) {
+      navigate('/')
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gb-navy flex items-center justify-center">
@@ -134,13 +143,27 @@ function AdminDashboard() {
     <div className="min-h-screen bg-gb-navy">
       <header className="bg-gb-navy border-b border-gb-gold/20">
         <div className="container mx-auto px-4 py-6">
-          <div className="flex items-center gap-4">
-            <img 
-              src="/gblogo.png" 
-              alt="GB Logo" 
-              className="h-12"
-            />
-            <h1 className="text-3xl font-bold text-gb-gold font-serif">Quiz Admin Dashboard</h1>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <img 
+                src="/gblogo.png" 
+                alt="GB Logo" 
+                className="h-12"
+              />
+              <div>
+                <h1 className="text-3xl font-bold text-gb-gold font-serif">Quiz Admin Dashboard</h1>
+                {trainer && (
+                  <p className="text-gb-gold/80 text-sm">Welcome, {trainer.name}</p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-2 px-4 py-2 text-gb-gold hover:bg-gb-gold/20 rounded-lg transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
           </div>
         </div>
       </header>
@@ -184,6 +207,17 @@ function AdminDashboard() {
                   <p className="text-gb-navy/70 text-sm">View, edit, and delete all your quizzes</p>
                 </div>
               </button>
+              
+              <button 
+                onClick={() => navigate('/admin/results')}
+                className="flex items-center w-full p-4 border border-gb-gold/30 rounded-lg hover:bg-gb-gold/10 transition-colors"
+              >
+                <Clock className="w-8 h-8 text-gb-gold mr-4" />
+                <div className="text-left">
+                  <h3 className="font-semibold text-gb-navy">Session Results</h3>
+                  <p className="text-gb-navy/70 text-sm">Review historical quiz results (28-day retention)</p>
+                </div>
+              </button>
             </div>
           </div>
           
@@ -212,16 +246,13 @@ function AdminDashboard() {
                           {quiz.description} • {new Date(quiz.created_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => navigate(`/admin/quiz/${quiz.id}/edit`)}
-                          className="p-2 text-gb-gold hover:bg-gb-gold/20 rounded-lg transition-colors"
-                          title="Edit Quiz"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <Settings className="w-5 h-5 text-gb-navy/40" />
-                      </div>
+                      <button
+                        onClick={() => navigate(`/admin/quiz/${quiz.id}/edit`)}
+                        className="p-2 text-gb-gold hover:bg-gb-gold/20 rounded-lg transition-colors"
+                        title="Edit Quiz"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 ))

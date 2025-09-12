@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Edit, Trash2, Plus, ArrowLeft, Calendar, Clock, Hash } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 
 function QuizManagement() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [quizzes, setQuizzes] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(null)
@@ -15,7 +17,7 @@ function QuizManagement() {
 
   const loadQuizzes = async () => {
     try {
-      const dummyTrainerId = '00000000-0000-0000-0000-000000000001'
+      const trainerId = user?.id
       
       // Get all quizzes with question count
       const { data: quizzesData, error } = await supabase
@@ -24,7 +26,7 @@ function QuizManagement() {
           *,
           questions (id)
         `)
-        .eq('trainer_id', dummyTrainerId)
+        .eq('trainer_id', trainerId)
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -91,35 +93,40 @@ function QuizManagement() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gb-navy flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
-          <p className="mt-4 text-gray-600">Loading quizzes...</p>
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gb-gold"></div>
+          <p className="mt-4 text-gb-gold">Loading quizzes...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow">
+    <div className="min-h-screen bg-gb-navy">
+      <header className="bg-gb-navy border-b border-gb-gold/20">
         <div className="container mx-auto px-4 py-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between w-full">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => navigate('/admin')}
-                className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 text-gb-gold hover:bg-gb-gold/20 rounded-lg transition-colors"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-6 h-6" />
               </button>
+              <img 
+                src="/gblogo.png" 
+                alt="GB Logo" 
+                className="h-12"
+              />
               <div>
-                <h1 className="text-3xl font-bold text-gray-900">Manage Quizzes</h1>
-                <p className="text-gray-600 mt-1">View, edit, and delete all your quizzes</p>
+                <h1 className="text-3xl font-bold text-gb-gold font-serif">Manage Quizzes</h1>
+                <p className="text-gb-gold/80 mt-1">View, edit, and delete all your quizzes</p>
               </div>
             </div>
             <Link 
               to="/admin/quiz/create"
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+              className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg hover:bg-gb-gold-light flex items-center gap-2 font-medium transition-colors"
             >
               <Plus className="w-4 h-4" />
               Create New Quiz
@@ -130,15 +137,13 @@ function QuizManagement() {
 
       <main className="container mx-auto px-4 py-8">
         {quizzes.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
-            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Hash className="w-8 h-8 text-gray-400" />
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">No quizzes yet</h2>
-            <p className="text-gray-600 mb-6">Create your first quiz to get started</p>
+          <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20 p-12 text-center">
+            <Hash className="w-16 h-16 text-gb-gold/50 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-gb-navy mb-2">No quizzes yet</h2>
+            <p className="text-gb-navy/70 mb-6">Create your first quiz to get started</p>
             <Link 
               to="/admin/quiz/create"
-              className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 inline-flex items-center gap-2"
+              className="bg-gb-gold text-gb-navy px-6 py-3 rounded-lg hover:bg-gb-gold-light inline-flex items-center gap-2 font-medium transition-colors"
             >
               <Plus className="w-4 h-4" />
               Create Your First Quiz
@@ -147,14 +152,14 @@ function QuizManagement() {
         ) : (
           <div className="grid gap-6">
             {quizzes.map((quiz) => (
-              <div key={quiz.id} className="bg-white rounded-lg shadow hover:shadow-md transition-shadow">
+              <div key={quiz.id} className="bg-white/95 rounded-lg shadow border border-gb-gold/20 hover:shadow-lg transition-shadow">
                 <div className="p-6">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <h3 className="text-xl font-semibold text-gray-900 mb-2">{quiz.title}</h3>
-                      <p className="text-gray-600 mb-4">{quiz.description || 'No description'}</p>
+                      <h3 className="text-xl font-semibold text-gb-navy mb-2 font-serif">{quiz.title}</h3>
+                      <p className="text-gb-navy/70 mb-4">{quiz.description || 'No description'}</p>
                       
-                      <div className="flex items-center gap-6 text-sm text-gray-500">
+                      <div className="flex items-center gap-6 text-sm text-gb-navy/60">
                         <div className="flex items-center gap-1">
                           <Hash className="w-4 h-4" />
                           <span>{quiz.questionCount} questions</span>
@@ -179,7 +184,7 @@ function QuizManagement() {
                     <div className="flex items-center gap-2 ml-4">
                       <button
                         onClick={() => navigate(`/admin/quiz/${quiz.id}/edit`)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        className="p-2 text-gb-gold hover:bg-gb-gold/20 rounded-lg transition-colors"
                         title="Edit Quiz"
                       >
                         <Edit className="w-4 h-4" />

@@ -59,20 +59,25 @@ export const AuthProvider = ({ children }) => {
 
       if (authError) throw authError
 
-      // Create trainer profile
+      // Create trainer profile - use the auth user's ID
       if (authData.user) {
         const { data: trainerData, error: trainerError } = await supabase
           .from('trainers')
           .insert({
             id: authData.user.id,
-            email,
+            email: authData.user.email,
             name
           })
           .select()
           .single()
 
-        if (trainerError) throw trainerError
-        setTrainer(trainerData)
+        if (trainerError) {
+          console.error('Error creating trainer profile:', trainerError)
+          // If trainer creation fails, we still have the auth user
+          setTrainer({ id: authData.user.id, email: authData.user.email, name })
+        } else {
+          setTrainer(trainerData)
+        }
       }
 
       return { data: authData, error: null }

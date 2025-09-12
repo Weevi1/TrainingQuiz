@@ -215,6 +215,22 @@ function QuizTaking() {
       setParticipantId(participantData.id)
       setHasJoined(true)
 
+      // Subscribe to participant deletion (kick detection)
+      const kickSubscription = supabase
+        .channel(`participant-${participantData.id}`)
+        .on('postgres_changes', {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'participants',
+          filter: `id=eq.${participantData.id}`,
+        }, (payload) => {
+          console.log('🚫 PARTICIPANT KICKED:', payload)
+          alert('You have been removed from the quiz by the trainer.')
+          // Redirect to Gustav Barkhuysen website
+          setTimeout(() => window.location.href = 'https://gblaw.capetown/', 2000)
+        })
+        .subscribe()
+
       // If session is already active, start the timer
       if (session.status === 'active') {
         console.log('⚡ Session is already active - starting timer')
@@ -298,8 +314,14 @@ function QuizTaking() {
         if (currentQuestion < quiz.questions.length - 1) {
           setCurrentQuestion(prev => prev + 1)
         } else {
-          // Last question - submit quiz
-          submitQuiz()
+          // Last question - submit quiz with final answer
+          // Use answers state updater to get the most current state
+          setAnswers(currentAnswers => {
+            const finalAnswers = { ...currentAnswers, [questionId]: answer }
+            // Submit with the final complete answers
+            setTimeout(() => submitQuiz(finalAnswers), 100)
+            return finalAnswers
+          })
         }
       }, 2500) // Show feedback for 2.5 seconds
     }, 500)
@@ -317,14 +339,29 @@ function QuizTaking() {
     }
   }
 
-  const submitQuiz = async () => {
+  const submitQuiz = async (finalAnswers = null) => {
     if (!participantId) return
 
+    // Use final answers if provided, otherwise use current state
+    const allAnswers = finalAnswers || answers
+
     try {
+      // Debug logging
+      console.log('Submitting quiz with answers:', allAnswers)
+      console.log('Total questions:', quiz.questions.length)
+      console.log('Total answers recorded:', Object.keys(allAnswers).length)
+      
       // Calculate scores and submit answers
       const answerSubmissions = quiz.questions.map(question => {
-        const userAnswer = answers[question.id] || ''
+        const userAnswer = allAnswers[question.id] || ''
         const isCorrect = userAnswer === question.correct_answer
+        
+        console.log(`Question ${question.id}:`, {
+          questionText: question.question_text,
+          correctAnswer: question.correct_answer,
+          userAnswer: userAnswer,
+          isCorrect: isCorrect
+        })
         
         return {
           participant_id: participantId,
@@ -366,8 +403,8 @@ function QuizTaking() {
     useEffect(() => {
       const timer = setTimeout(() => {
         window.close() // Try to close the window/tab
-        // If can't close, navigate home as fallback
-        setTimeout(() => navigate('/'), 1000)
+        // If can't close, redirect to Gustav Barkhuysen website as fallback
+        setTimeout(() => window.location.href = 'https://gblaw.capetown/', 1000)
       }, 5000)
       
       return () => clearTimeout(timer)
@@ -446,10 +483,10 @@ function QuizTaking() {
           <h1 className="text-2xl font-bold mb-4">Oops!</h1>
           <p className="text-gray-600 mb-6">{error}</p>
           <button 
-            onClick={() => navigate('/')}
-            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+            onClick={() => window.location.href = 'https://gblaw.capetown/'}
+            className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg hover:bg-gb-gold-light font-bold"
           >
-            Go Home
+            Visit Gustav Barkhuysen
           </button>
         </div>
       </div>
@@ -458,57 +495,53 @@ function QuizTaking() {
 
   if (!hasJoined) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-pink-900 to-red-900 flex items-center justify-center relative overflow-hidden">
-        {/* 🎬 GAME SHOW BACKDROP LIGHTS */}
+      <div className="fixed inset-0 bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center p-4 overflow-hidden">
+        {/* Subtle professional background */}
         <div className="absolute inset-0">
-          <div className="absolute top-10 left-10 w-32 h-32 bg-yellow-400 rounded-full opacity-30 animate-pulse"></div>
-          <div className="absolute top-20 right-20 w-24 h-24 bg-cyan-400 rounded-full opacity-40 animate-pulse" style={{animationDelay: '0.5s'}}></div>
-          <div className="absolute bottom-20 left-20 w-28 h-28 bg-green-400 rounded-full opacity-35 animate-pulse" style={{animationDelay: '1s'}}></div>
-          <div className="absolute bottom-10 right-10 w-36 h-36 bg-orange-400 rounded-full opacity-25 animate-pulse" style={{animationDelay: '1.5s'}}></div>
-          <div className="absolute top-1/2 left-1/4 w-20 h-20 bg-pink-400 rounded-full opacity-30 animate-bounce" style={{animationDelay: '2s'}}></div>
-          <div className="absolute top-1/3 right-1/3 w-16 h-16 bg-blue-400 rounded-full opacity-40 animate-bounce" style={{animationDelay: '2.5s'}}></div>
-        </div>
-
-        {/* ✨ FLOATING SPARKLES */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-20 left-1/2 text-4xl animate-bounce" style={{animationDelay: '0.2s'}}>✨</div>
-          <div className="absolute top-1/3 left-10 text-3xl animate-bounce" style={{animationDelay: '0.8s'}}>🌟</div>
-          <div className="absolute bottom-1/4 right-10 text-4xl animate-bounce" style={{animationDelay: '1.2s'}}>💫</div>
-          <div className="absolute top-1/4 right-1/4 text-2xl animate-bounce" style={{animationDelay: '1.8s'}}>⭐</div>
+          <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-gb-gold/10 rounded-full blur-3xl"></div>
+          <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-blue-400/10 rounded-full blur-3xl"></div>
         </div>
         
-        <div className="bg-gradient-to-br from-white to-yellow-50 p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-8 border-gradient-to-r from-yellow-400 via-red-500 to-pink-500 animate-pulse">
-          {/* 🎪 DRAMATIC HEADER */}
-          <div className="bg-gradient-to-r from-red-500 via-pink-500 to-purple-600 text-white px-6 py-3 rounded-full mb-6 animate-bounce border-4 border-yellow-300">
-            <h1 className="text-2xl font-black uppercase tracking-wider drop-shadow-lg">🎪 QUIZ ARENA 🎪</h1>
+        <div className="bg-gb-navy p-8 rounded-3xl shadow-2xl max-w-md w-full text-center relative border-2 border-gb-gold z-10">
+          {/* Gustav Barkhuysen Logo */}
+          <div className="mb-6">
+            <img 
+              src="/gblogo.png" 
+              alt="Gustav Barkhuysen Attorneys" 
+              className="h-16 mx-auto mb-4"
+            />
+            <div className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg">
+              <h1 className="text-xl font-bold">Training Quiz</h1>
+            </div>
           </div>
           
-          {/* 🏆 QUIZ TITLE */}
-          <div className="bg-gradient-to-r from-yellow-400 to-orange-500 text-black p-4 rounded-2xl mb-6 border-4 border-red-400 animate-pulse">
-            <h2 className="text-xl font-bold uppercase tracking-wide">🏆 {quiz.title} 🏆</h2>
-            <p className="text-sm font-bold mt-2">
-              Session: <span className="font-mono text-lg bg-black text-yellow-400 px-2 py-1 rounded animate-pulse">{sessionCode}</span>
+          {/* Quiz Information */}
+          <div className="bg-white/10 p-4 rounded-xl mb-6 border border-gb-gold/20">
+            <h2 className="text-xl font-bold text-gb-gold mb-2">{quiz.title}</h2>
+            <p className="text-gb-gold text-sm">
+              Session: <span className="font-mono bg-white/20 px-2 py-1 rounded">{sessionCode}</span>
             </p>
           </div>
           
+          {/* Status Messages */}
           {session.status === 'waiting' && (
-            <div className="bg-gradient-to-r from-yellow-400 to-orange-500 border-4 border-red-500 rounded-xl p-4 mb-6 animate-bounce">
-              <p className="text-black font-bold text-lg">
-                ⏳ BACKSTAGE PREP! ⏳
+            <div className="bg-yellow-500/20 border border-yellow-500/50 rounded-xl p-4 mb-6">
+              <p className="text-yellow-300 font-semibold">
+                ⏳ Waiting for trainer to start
               </p>
-              <p className="text-black text-sm font-semibold">
-                Join now and wait for the show to begin!
+              <p className="text-yellow-200 text-sm">
+                Join now to participate
               </p>
             </div>
           )}
 
           {session.status === 'active' && (
-            <div className="bg-gradient-to-r from-green-400 to-emerald-500 border-4 border-yellow-500 rounded-xl p-4 mb-6 animate-pulse">
-              <p className="text-black font-bold text-lg">
-                🚀 SHOW IS LIVE! 🚀
+            <div className="bg-green-500/20 border border-green-500/50 rounded-xl p-4 mb-6">
+              <p className="text-green-300 font-semibold">
+                🚀 Quiz is now active!
               </p>
-              <p className="text-black text-sm font-semibold">
-                Join the arena NOW!
+              <p className="text-green-200 text-sm">
+                Join to start answering questions
               </p>
             </div>
           )}
@@ -516,13 +549,13 @@ function QuizTaking() {
           <div className="space-y-6">
             {/* Join as Participant */}
             <div className="bg-white/10 p-4 rounded-xl border border-gb-gold/20">
-              <label className="block text-lg font-bold text-gb-gold mb-3">Join as Participant</label>
+              <label className="block text-lg font-bold text-gb-gold mb-3">Enter the Game</label>
               <input 
                 type="text" 
                 value={participant.name}
                 onChange={(e) => setParticipant({ name: e.target.value })}
                 className="w-full px-4 py-3 text-lg font-medium text-center border-2 border-gb-gold/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-gb-gold focus:border-gb-gold bg-white text-gb-navy"
-                placeholder="Enter your name..."
+                placeholder="Name..."
                 onKeyPress={(e) => e.key === 'Enter' && joinQuiz()}
               />
               <button 
@@ -538,38 +571,6 @@ function QuizTaking() {
               </button>
             </div>
             
-            {/* Admin Login */}
-            <div className="bg-red-900/20 p-4 rounded-xl border border-red-400/20">
-              <label className="block text-lg font-bold text-red-300 mb-3">Admin Remote Control</label>
-              <input 
-                type="password" 
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-                className="w-full px-4 py-3 text-lg font-medium text-center border-2 border-red-400/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400 bg-white text-gb-navy"
-                placeholder="Admin password..."
-                onKeyPress={(e) => e.key === 'Enter' && joinAsAdmin()}
-              />
-              <button 
-                onClick={joinAsAdmin}
-                className={`w-full mt-3 py-3 text-lg font-bold rounded-lg transition-all ${
-                  adminPassword.trim() 
-                    ? 'bg-red-600 text-white hover:bg-red-700' 
-                    : 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                }`}
-                disabled={!adminPassword.trim()}
-              >
-                Login as Admin
-              </button>
-            </div>
-          </div>
-
-          {/* 🎉 EXCITEMENT FOOTER */}
-          <div className="mt-6 flex justify-center space-x-2">
-            <div className="animate-bounce text-2xl" style={{animationDelay: '0.1s'}}>🎉</div>
-            <div className="animate-bounce text-2xl" style={{animationDelay: '0.2s'}}>🎊</div>
-            <div className="animate-bounce text-2xl" style={{animationDelay: '0.3s'}}>🎈</div>
-            <div className="animate-bounce text-2xl" style={{animationDelay: '0.4s'}}>🎆</div>
-            <div className="animate-bounce text-2xl" style={{animationDelay: '0.5s'}}>🎇</div>
           </div>
         </div>
       </div>
@@ -579,20 +580,24 @@ function QuizTaking() {
   if (session.status === 'waiting') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center relative overflow-hidden">
-        {/* 🎬 BACKDROP STAGE LIGHTS */}
+        {/* Subtle background */}
         <div className="absolute inset-0">
-          <div className="absolute top-10 left-10 w-32 h-32 bg-yellow-400 rounded-full opacity-20 animate-pulse"></div>
-          <div className="absolute top-20 right-20 w-24 h-24 bg-red-400 rounded-full opacity-30 animate-pulse" style={{animationDelay: '0.5s'}}></div>
-          <div className="absolute bottom-20 left-20 w-28 h-28 bg-blue-400 rounded-full opacity-25 animate-pulse" style={{animationDelay: '1s'}}></div>
-          <div className="absolute bottom-10 right-10 w-36 h-36 bg-green-400 rounded-full opacity-20 animate-pulse" style={{animationDelay: '1.5s'}}></div>
+          <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-yellow-400/10 rounded-full blur-3xl"></div>
+          <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-blue-400/10 rounded-full blur-3xl"></div>
         </div>
         
-        <div className="bg-gb-navy p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-2 border-gb-gold">
+        <div className="bg-gb-navy/95 backdrop-blur-sm p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-2 border-gb-gold">
           {isAdmin ? (
             <>
               {/* Admin Remote Control Interface */}
-              <div className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg mb-6">
-                <h1 className="text-xl font-bold">Admin Remote Control</h1>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="bg-gb-gold p-2 rounded-lg">
+                  <Users className="w-5 h-5 text-gb-navy" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-white">Admin Control</h1>
+                  <p className="text-gb-gold text-sm font-medium">Session Management</p>
+                </div>
               </div>
               
               <div className="bg-white/10 p-4 rounded-xl mb-6 border border-gb-gold/20">
@@ -645,17 +650,26 @@ function QuizTaking() {
           ) : (
             <>
               {/* Participant Waiting Interface */}
-              <div className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg mb-6">
-                <h1 className="text-xl font-bold">Ready to Start</h1>
+              <div className="mb-6">
+                <div className="bg-gb-gold p-2 rounded-lg w-12 h-12 mx-auto mb-4 flex items-center justify-center">
+                  <Users className="w-6 h-6 text-gb-navy" />
+                </div>
+                <div className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg">
+                  <h1 className="text-xl font-bold">Ready to Start</h1>
+                </div>
               </div>
               
-              <div className="bg-white/10 p-4 rounded-xl mb-6 border border-gb-gold/20">
-                <h3 className="text-lg font-bold text-gb-gold">Welcome {participant.name}!</h3>
-                <p className="text-white mt-2">You're ready for {quiz.title}</p>
+              <div className="bg-gb-gold/10 p-4 rounded-xl mb-6 border border-gb-gold/30">
+                <h3 className="text-lg font-bold text-gb-gold mb-2">Welcome {participant.name}!</h3>
+                <p className="text-white text-sm">Prepared for {quiz.title}</p>
               </div>
 
-              <div className="bg-white/5 p-4 rounded-xl border border-gb-gold/20">
-                <p className="text-gb-gold text-sm">Waiting for trainer to start the quiz...</p>
+              <div className="bg-gb-gold/5 p-4 rounded-xl border border-gb-gold/20">
+                <div className="text-center">
+                  <div className="w-2 h-2 bg-gb-gold rounded-full animate-pulse mx-auto mb-2"></div>
+                  <p className="text-gb-gold text-sm font-medium">Awaiting trainer to begin session...</p>
+                  <p className="text-white/80 text-xs mt-1">Gustav Barkhuysen Training</p>
+                </div>
               </div>
             </>
           )}
@@ -684,54 +698,88 @@ function QuizTaking() {
           <div className="absolute bottom-1/3 left-1/4 text-3xl animate-bounce" style={{animationDelay: '2.2s'}}>🎈</div>
         </div>
         
-        <div className="bg-gradient-to-br from-white to-yellow-50 p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-8 border-gradient-to-r from-yellow-400 via-green-500 to-blue-500">
-          {/* 🎪 SUCCESS HEADER */}
-          <div className="bg-gradient-to-r from-green-500 via-emerald-500 to-teal-600 text-white px-6 py-4 rounded-full mb-6 animate-pulse border-4 border-yellow-300">
-            <h1 className="text-2xl font-black uppercase tracking-wider drop-shadow-lg">🎊 QUIZ COMPLETE! 🎊</h1>
-          </div>
-          
-          {/* 🏆 SUCCESS ICON */}
+        <div className="bg-gb-navy/95 backdrop-blur-sm p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-2 border-gb-gold">
+          {/* Success Header */}
           <div className="mb-6">
-            <div className="w-24 h-24 mx-auto bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full flex items-center justify-center border-8 border-green-400 animate-spin" style={{animationDuration: '3s'}}>
-              <CheckCircle className="w-12 h-12 text-white" />
+            <div className="bg-gb-gold p-3 rounded-lg w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+              <CheckCircle className="w-8 h-8 text-gb-navy" />
+            </div>
+            <div className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg">
+              <h1 className="text-xl font-bold">Training Complete</h1>
             </div>
           </div>
           
-          {/* 🎤 CONTESTANT CELEBRATION */}
-          <div className="bg-gradient-to-r from-purple-400 to-pink-500 text-white p-4 rounded-2xl mb-6 border-4 border-yellow-400">
-            <h2 className="text-xl font-bold uppercase tracking-wide mb-2">🌟 {participant.name} 🌟</h2>
-            <p className="text-lg font-bold">
-              YOU'VE CONQUERED THE QUIZ!
-            </p>
+          {/* Participant Recognition */}
+          <div className="bg-gb-gold/10 p-6 rounded-xl mb-6 border border-gb-gold/30">
+            <h2 className="text-xl font-bold text-gb-gold mb-2">{participant.name}</h2>
+            <p className="text-white text-base font-medium mb-3">Assessment Completed Successfully</p>
+            <div className="flex items-center justify-center gap-2">
+              <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+              <span className="text-green-300 text-sm font-medium">Submitted</span>
+            </div>
           </div>
           
-          {/* 🎯 WAITING STATUS */}
-          <div className="bg-gradient-to-r from-blue-100 to-purple-100 p-4 rounded-2xl mb-6 border-4 border-blue-400">
-            <p className="text-lg font-bold text-blue-800 mb-2">
-              📺 STAY TUNED! 📺
-            </p>
-            <p className="text-sm font-semibold text-blue-600">
-              Waiting for all contestants to finish...
-            </p>
-            <p className="text-xs text-blue-500 mt-2">
-              Results will be revealed shortly!
-            </p>
+          {/* Status Information */}
+          <div className="bg-gb-gold/5 p-4 rounded-xl mb-6 border border-gb-gold/20">
+            <p className="text-gb-gold text-sm font-medium mb-2">Processing Results</p>
+            <p className="text-white/80 text-xs mb-3">Awaiting completion by all participants</p>
+            <div className="w-2 h-2 bg-gb-gold rounded-full animate-pulse mx-auto"></div>
           </div>
           
-          {/* 🎉 CELEBRATION FOOTER */}
-          <div className="flex justify-center space-x-2 mb-4">
-            <div className="animate-bounce text-3xl" style={{animationDelay: '0.1s'}}>🎉</div>
-            <div className="animate-bounce text-3xl" style={{animationDelay: '0.2s'}}>🎊</div>
-            <div className="animate-bounce text-3xl" style={{animationDelay: '0.3s'}}>🏆</div>
-            <div className="animate-bounce text-3xl" style={{animationDelay: '0.4s'}}>⭐</div>
-            <div className="animate-bounce text-3xl" style={{animationDelay: '0.5s'}}>🎈</div>
+          {/* Company Branding */}
+          <div className="bg-gb-gold/5 rounded-lg p-3 border border-gb-gold/20">
+            <div className="text-center">
+              <div className="text-xs text-gb-gold/80 uppercase tracking-wide mb-1">Gustav Barkhuysen Attorneys</div>
+              <div className="text-xs text-white font-medium">Professional Training System</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Admin interface when session is active
+  if (isAdmin && session.status === 'active') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center relative overflow-hidden">
+        <div className="absolute inset-0">
+          <div className="absolute top-10 left-10 w-32 h-32 bg-yellow-400 rounded-full opacity-20 animate-pulse"></div>
+          <div className="absolute top-20 right-20 w-24 h-24 bg-red-400 rounded-full opacity-30 animate-pulse" style={{animationDelay: '0.5s'}}></div>
+          <div className="absolute bottom-20 left-20 w-28 h-28 bg-blue-400 rounded-full opacity-25 animate-pulse" style={{animationDelay: '1s'}}></div>
+          <div className="absolute bottom-10 right-10 w-36 h-36 bg-green-400 rounded-full opacity-20 animate-pulse" style={{animationDelay: '1.5s'}}></div>
+        </div>
+        
+        <div className="bg-gb-navy p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-2 border-gb-gold">
+          <div className="bg-gb-gold text-gb-navy px-6 py-2 rounded-lg mb-6">
+            <h1 className="text-xl font-bold">Admin Remote Control</h1>
           </div>
           
-          {/* 🔴 LIVE RECORDING INDICATOR */}
-          <div className="bg-red-500 text-white px-3 py-1 rounded-full text-xs font-bold animate-pulse inline-flex items-center">
-            <div className="w-2 h-2 bg-white rounded-full mr-1 animate-ping"></div>
-            LIVE RECORDING
+          <div className="bg-green-500/20 p-4 rounded-xl mb-6 border border-green-400/50">
+            <div className="text-green-300 text-6xl mb-4 animate-pulse">🔥</div>
+            <h2 className="text-green-300 text-2xl font-bold mb-2">QUIZ IS LIVE!</h2>
+            <p className="text-white text-lg">Participants are answering questions</p>
           </div>
+          
+          <div className="bg-white/10 p-4 rounded-xl mb-6 border border-gb-gold/20">
+            <h3 className="text-lg font-bold text-gb-gold mb-4">Quiz Session</h3>
+            <div className="space-y-2 text-left">
+              <p className="text-white"><span className="font-semibold">Title:</span> {quiz.title}</p>
+              <p className="text-white"><span className="font-semibold">Time:</span> {Math.floor(quiz.time_limit / 60)} minutes</p>
+              <p className="text-white"><span className="font-semibold">Questions:</span> {quiz.questions.length}</p>
+              <p className="text-white"><span className="font-semibold">Status:</span> 
+                <span className="ml-2 px-2 py-1 rounded text-sm font-bold bg-green-600 text-white animate-pulse">
+                  🔥 LIVE
+                </span>
+              </p>
+            </div>
+          </div>
+          
+          <button
+            onClick={endQuizAsAdmin}
+            className="w-full py-4 text-lg font-bold bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all"
+          >
+            ⏹️ End Quiz
+          </button>
         </div>
       </div>
     )
@@ -834,7 +882,7 @@ function QuizTaking() {
             </div>
             
             <div className="text-center mb-8">
-              <h2 className="text-3xl font-black text-gray-900 mb-4 leading-tight">{question.question_text}</h2>
+              <h2 className="text-lg sm:text-xl font-black text-gray-900 mb-4 leading-tight">{question.question_text}</h2>
               <div className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 w-20 mx-auto rounded-full"></div>
             </div>
             
@@ -881,7 +929,7 @@ function QuizTaking() {
                       <div className={`w-12 h-12 rounded-full border-4 mr-4 flex items-center justify-center font-black text-lg ${labelStyle}`}>
                         {answerSelected && isCorrect ? '✅' : answerSelected && isSelected && !isCorrect ? '❌' : buttonLabels[index]}
                       </div>
-                      <span className="text-xl font-semibold text-gray-800">{option}</span>
+                      <span className="text-sm sm:text-base font-semibold text-gray-800">{option}</span>
                       {answerSelected && isCorrect && (
                         <div className="ml-auto text-2xl animate-bounce">🎉</div>
                       )}
