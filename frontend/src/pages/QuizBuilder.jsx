@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Plus, Trash2, Save, ArrowLeft } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { db } from '../lib/firebase'
+import { doc, getDoc, setDoc, addDoc, collection, updateDoc, deleteDoc } from 'firebase/firestore'
 import { useAuth } from '../contexts/AuthContext'
 
 function QuizBuilder() {
@@ -28,32 +29,28 @@ function QuizBuilder() {
   const loadQuiz = async () => {
     setLoading(true)
     try {
-      // Get quiz with questions
-      const { data: quizData, error: quizError } = await supabase
-        .from('quizzes')
-        .select(`
-          *,
-          questions (*)
-        `)
-        .eq('id', quizId)
-        .single()
+      console.log('📚 Loading quiz for editing:', quizId)
 
-      if (quizError) {
-        console.error('Error loading quiz:', quizError)
-        alert('Error loading quiz. Redirecting to create new quiz.')
+      // Get quiz from Firebase
+      const quizDoc = await getDoc(doc(db, 'quizzes', quizId))
+      if (!quizDoc.exists()) {
+        alert('Quiz not found. Redirecting to create new quiz.')
         navigate('/admin/quiz/create')
         return
       }
 
+      const quizData = { id: quizDoc.id, ...quizDoc.data() }
+
       // Transform questions to match the expected format
-      const transformedQuestions = quizData.questions
-        .sort((a, b) => a.order_index - b.order_index)
-        .map(q => ({
-          id: q.id,
-          questionText: q.question_text,
-          questionType: q.question_type,
-          options: JSON.parse(q.options || '["", "", "", ""]'),
-          correctAnswer: q.correct_answer,
+      const transformedQuestions = (quizData.questions || [])
+        .sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0))
+        .map((q, index) => ({
+          id: q.id || `q_${index}`,
+          questionText: q.questionText || q.question_text || '',
+          questionType: q.questionType || q.question_type || 'multiple_choice',
+          options: Array.isArray(q.options) ? q.options :
+                   (typeof q.options === 'string' ? JSON.parse(q.options) : ["", "", "", ""]),
+          correctAnswer: q.correctAnswer || q.correct_answer || '',
           points: q.points || 1
         }))
 
@@ -61,9 +58,11 @@ function QuizBuilder() {
         id: quizData.id,
         title: quizData.title,
         description: quizData.description || '',
-        timeLimit: quizData.time_limit,
+        timeLimit: quizData.timeLimit,
         questions: transformedQuestions
       })
+
+      console.log('✅ Quiz loaded successfully:', quizData.title)
     } catch (error) {
       console.error('Error loading quiz:', error)
       alert('Error loading quiz. Please try again.')
@@ -85,7 +84,7 @@ function QuizBuilder() {
       alert('Please add a quiz title')
       return
     }
-    
+
     if (quiz.questions.length === 0) {
       console.log('❌ VALIDATION FAILED: No questions added')
       alert('Please add at least one question')
@@ -94,114 +93,73 @@ function QuizBuilder() {
 
     console.log('✅ VALIDATION PASSED - Starting save process...')
     setSaving(true)
-    
+
     try {
-      const trainerId = user?.id
+      const trainerId = user?.uid
       console.log('👤 Using trainer ID:', trainerId)
 
-      let quizData
-      
       if (isEditing && quiz.id) {
         // Update existing quiz
         console.log('📝 Updating existing quiz with ID:', quiz.id)
-        
+
         const quizToUpdate = {
           title: quiz.title,
           description: quiz.description || '',
-          time_limit: quiz.timeLimit,
-          updated_at: new Date().toISOString()
+          timeLimit: quiz.timeLimit,
+          questions: quiz.questions.map((question, index) => ({
+            id: question.id,
+            questionText: question.questionText,
+            questionType: question.questionType,
+            options: question.options,
+            correctAnswer: question.correctAnswer,
+            points: question.points,
+            orderIndex: index
+          })),
+          updatedAt: new Date().toISOString()
         }
-        
-        const { data: updatedQuiz, error: quizError } = await supabase
-          .from('quizzes')
-          .update(quizToUpdate)
-          .eq('id', quiz.id)
-          .select()
-          .single()
 
-        if (quizError) {
-          console.error('❌ QUIZ UPDATE FAILED:', quizError)
-          throw quizError
-        }
-        
-        quizData = updatedQuiz
-        console.log('✅ Quiz updated successfully:', quizData)
+        await updateDoc(doc(db, 'quizzes', quiz.id), quizToUpdate)
+        console.log('✅ Quiz updated successfully')
 
-        // Delete existing questions
-        console.log('🗑️ Deleting existing questions...')
-        const { error: deleteError } = await supabase
-          .from('questions')
-          .delete()
-          .eq('quiz_id', quiz.id)
-
-        if (deleteError) {
-          console.error('❌ QUESTIONS DELETE FAILED:', deleteError)
-          throw deleteError
-        }
-        
       } else {
         // Create new quiz
         console.log('➕ Creating new quiz...')
-        
+
         const quizToInsert = {
-          trainer_id: trainerId,
+          trainerId: trainerId,
           title: quiz.title,
           description: quiz.description || '',
-          time_limit: quiz.timeLimit
+          timeLimit: quiz.timeLimit,
+          questions: quiz.questions.map((question, index) => ({
+            id: question.id,
+            questionText: question.questionText,
+            questionType: question.questionType,
+            options: question.options,
+            correctAnswer: question.correctAnswer,
+            points: question.points,
+            orderIndex: index
+          })),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         }
-        
-        const { data: newQuiz, error: quizError } = await supabase
-          .from('quizzes')
-          .insert(quizToInsert)
-          .select()
-          .single()
 
-        if (quizError) {
-          console.error('❌ QUIZ INSERT FAILED:', quizError)
-          throw quizError
-        }
-        
-        quizData = newQuiz
-        console.log('✅ Quiz inserted successfully:', quizData)
-      }
-
-      // Insert/re-insert questions
-      const questionsToInsert = quiz.questions.map((question, index) => {
-        const questionData = {
-          quiz_id: quizData.id,
-          question_text: question.questionText,
-          question_type: question.questionType,
-          options: JSON.stringify(question.options),
-          correct_answer: question.correctAnswer,
-          points: question.points,
-          order_index: index + 1
-        }
-        console.log(`📋 Question ${index + 1} data:`, questionData)
-        return questionData
-      })
-
-      console.log('💾 Inserting', questionsToInsert.length, 'questions...')
-      const { error: questionsError } = await supabase
-        .from('questions')
-        .insert(questionsToInsert)
-
-      if (questionsError) {
-        console.error('❌ QUESTIONS INSERT FAILED:', questionsError)
-        throw questionsError
+        const newQuizRef = await addDoc(collection(db, 'quizzes'), quizToInsert)
+        console.log('✅ Quiz created successfully with ID:', newQuizRef.id)
       }
 
       console.log('🎉 ALL DATA SAVED SUCCESSFULLY!')
       alert(isEditing ? 'Quiz updated successfully!' : 'Quiz saved successfully!')
-      navigate('/admin')
-      
+      navigate('/admin/quizzes')
+
     } catch (error) {
       console.error('💥 SAVE QUIZ ERROR:', error)
       console.error('Error details:', {
         message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code
+        code: error.code,
+        details: error.details
       })
+      console.error('Current user ID:', user?.uid)
+      console.error('Quiz trainer ID:', quiz.trainerId || 'not set')
       alert(`Error ${isEditing ? 'updating' : 'saving'} quiz: ${error.message}`)
     } finally {
       console.log('🏁 Save process completed, setting saving to false')
@@ -300,7 +258,7 @@ function QuizBuilder() {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20 p-6 mb-6">
+        <div className="rounded-lg shadow border border-gb-gold/20 p-6 mb-6" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
           <h2 className="text-xl font-semibold text-gb-navy font-serif mb-4">Quiz Details</h2>
           <div className="grid md:grid-cols-2 gap-6">
             <div>
@@ -337,19 +295,10 @@ function QuizBuilder() {
           </div>
         </div>
 
-        <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20 p-6">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h2 className="text-xl font-semibold text-gb-navy font-serif">Questions</h2>
-              <p className="text-gb-navy/70 text-sm mt-1">Create engaging questions for your training quiz</p>
-            </div>
-            <button 
-              onClick={addQuestion}
-              className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg hover:bg-gb-gold-light flex items-center gap-2 font-medium transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Add Question
-            </button>
+        <div className="rounded-lg shadow border border-gb-gold/20 p-6" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold text-gb-navy font-serif">Questions</h2>
+            <p className="text-gb-navy/70 text-sm mt-1">Create engaging questions for your training quiz</p>
           </div>
 
           {quiz.questions.length === 0 ? (
@@ -358,11 +307,19 @@ function QuizBuilder() {
                 <Plus className="w-8 h-8 text-gb-gold/60" />
               </div>
               <p className="text-gb-navy/60 text-lg mb-4">No questions added yet</p>
-              <p className="text-gb-navy/50 text-sm">Click "Add Question" above to create your first question</p>
+              <p className="text-gb-navy/50 text-sm mb-6">Click "Add Question" below to create your first question</p>
+              <button
+                onClick={addQuestion}
+                className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg hover:bg-gb-gold-light flex items-center gap-2 font-medium transition-colors mx-auto"
+              >
+                <Plus className="w-4 h-4" />
+                Add Question
+              </button>
             </div>
           ) : (
-            <div className="space-y-6">
-              {quiz.questions.map((question, index) => (
+            <>
+              <div className="space-y-6">
+                {quiz.questions.map((question, index) => (
                 <div key={question.id} className="border border-gb-gold/30 rounded-lg p-6 bg-gradient-to-r from-white to-gb-gold/5">
                   <div className="flex justify-between items-center mb-4">
                     <div className="flex items-center gap-3">
@@ -371,9 +328,15 @@ function QuizBuilder() {
                       </div>
                       <h3 className="font-semibold text-gb-navy">Question {index + 1}</h3>
                     </div>
-                    <button 
+                    <button
                       onClick={() => removeQuestion(question.id)}
-                      className="text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                      className="p-2 rounded-lg transition-colors"
+                      style={{
+                        color: 'var(--error-color, #dc2626)',
+                        '--hover-bg': 'var(--error-light-color, #fef2f2)'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--error-light-color, #fef2f2)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       title="Delete Question"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -395,17 +358,26 @@ function QuizBuilder() {
                     <div className="space-y-3">
                       <label className="block text-sm font-semibold text-gb-navy mb-3">Answer Options (select the correct one)</label>
                       {question.options.map((option, optionIndex) => (
-                        <div key={optionIndex} className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
-                          question.correctAnswer === option 
-                            ? 'border-green-500 bg-green-50' 
-                            : 'border-gb-gold/30 hover:border-gb-gold/50'
-                        }`}>
-                          <input 
-                            type="radio" 
+                        <div
+                          key={optionIndex}
+                          className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
+                            question.correctAnswer === option
+                              ? ''
+                              : 'border-gb-gold/30 hover:border-gb-gold/50'
+                          }`}
+                          style={question.correctAnswer === option ? {
+                            borderColor: 'var(--success-color, #22c55e)',
+                            backgroundColor: 'var(--success-light-color, #f0fdf4)'
+                          } : {}}
+                        >
+                          <input
+                            type="radio"
                             name={`correct-${question.id}`}
                             checked={question.correctAnswer === option}
                             onChange={() => updateQuestion(question.id, 'correctAnswer', option)}
-                            className="text-green-600 focus:ring-green-500"
+                            style={{
+                              accentColor: 'var(--success-color, #22c55e)'
+                            }}
                           />
                           <span className="text-sm font-medium text-gb-navy/70 w-6">
                             {String.fromCharCode(65 + optionIndex)}.
@@ -429,8 +401,17 @@ function QuizBuilder() {
                         </div>
                       ))}
                       {!question.correctAnswer && (
-                        <p className="text-amber-600 text-sm flex items-center gap-2 mt-2">
-                          <span className="w-4 h-4 bg-amber-100 rounded-full flex items-center justify-center text-amber-600 text-xs font-bold">!</span>
+                        <p
+                          className="text-sm flex items-center gap-2 mt-2"
+                          style={{ color: 'var(--warning-color, #d97706)' }}
+                        >
+                          <span
+                            className="w-4 h-4 rounded-full flex items-center justify-center text-xs font-bold"
+                            style={{
+                              backgroundColor: 'var(--warning-light-color, #fef3c7)',
+                              color: 'var(--warning-color, #d97706)'
+                            }}
+                          >!</span>
                           Please select the correct answer
                         </p>
                       )}
@@ -439,6 +420,16 @@ function QuizBuilder() {
                 </div>
               ))}
             </div>
+            <div className="mt-6 text-center">
+              <button
+                onClick={addQuestion}
+                className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg hover:bg-gb-gold-light flex items-center gap-2 font-medium transition-colors mx-auto"
+              >
+                <Plus className="w-4 h-4" />
+                Add Question
+              </button>
+            </div>
+            </>
           )}
         </div>
       </main>

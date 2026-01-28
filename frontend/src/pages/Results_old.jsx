@@ -11,7 +11,7 @@ function Results() {
 
   useEffect(() => {
     loadResults()
-    // 🎵 Play victory theme when results load!
+    // Play victory theme when results load!
     setTimeout(() => gameShowSounds.playQuizComplete(), 500)
   }, [sessionId])
 
@@ -59,11 +59,11 @@ function Results() {
 
       // Calculate participant stats
       const participantStats = {}
-      
+
       answersData?.forEach(answer => {
         const participantId = answer.participants.id
         const participantName = answer.participants.name
-        
+
         if (!participantStats[participantId]) {
           participantStats[participantId] = {
             id: participantId,
@@ -75,11 +75,11 @@ function Results() {
             answers: []
           }
         }
-        
+
         participantStats[participantId].total++
         participantStats[participantId].totalTime += answer.time_taken || 0
         participantStats[participantId].answers.push(answer)
-        
+
         if (answer.is_correct) {
           participantStats[participantId].correct++
           participantStats[participantId].score += answer.questions.points || 1
@@ -90,7 +90,7 @@ function Results() {
       const participants = Object.values(participantStats).map(participant => {
         const percentage = participant.total > 0 ? Math.round((participant.correct / participant.total) * 100) : 0
         const avgTime = participant.total > 0 ? Math.round(participant.totalTime / participant.total) : 0
-        
+
         // Calculate streak (consecutive correct answers)
         let maxStreak = 0
         let currentStreak = 0
@@ -102,7 +102,7 @@ function Results() {
             currentStreak = 0
           }
         })
-        
+
         return {
           name: participant.name,
           score: percentage,
@@ -124,7 +124,7 @@ function Results() {
         speedDemon: participants.length > 0 ? participants.reduce((fastest, p) => p.avgTime < fastest.avgTime ? p : fastest) : null,
         perfectionist: participants.find(p => p.score === 100) || participants[0] || null,
         streakMaster: participants.length > 0 ? participants.reduce((best, p) => p.streak > best.streak ? p : best) : null,
-        
+
         // New exciting awards!
         closeCall: participants.length >= 2 ? (() => {
           // Find participants with scores within 5% of each other
@@ -134,7 +134,7 @@ function Results() {
           }
           return null
         })() : null,
-        
+
         lightningRound: participants.length > 0 ? (() => {
           // Find who answered most questions correctly in shortest total time
           const validParticipants = participants.filter(p => p.correctAnswers > 0)
@@ -145,7 +145,7 @@ function Results() {
             return scorePerSecond > bestScorePerSecond ? p : best
           })
         })() : null,
-        
+
         comebackKid: participants.length > 0 ? (() => {
           // Find participant who improved most in second half
           const withImprovement = participants.map(p => {
@@ -157,11 +157,11 @@ function Results() {
             }
             return { ...p, improvement: 0 }
           })
-          const bestComeback = withImprovement.reduce((best, p) => 
+          const bestComeback = withImprovement.reduce((best, p) =>
             p.improvement > best.improvement ? p : best, withImprovement[0])
           return bestComeback?.improvement > 0 ? bestComeback : null
         })() : null,
-        
+
         steadyEddie: participants.length > 0 ? (() => {
           // Most consistent timing across all answers
           const withVariance = participants.map(p => {
@@ -173,17 +173,17 @@ function Results() {
             }
             return { ...p, timeVariance: Infinity }
           }).filter(p => p.timeVariance !== Infinity)
-          
+
           if (withVariance.length === 0) return null
-          return withVariance.reduce((best, p) => 
+          return withVariance.reduce((best, p) =>
             p.timeVariance < best.timeVariance ? p : best)
         })() : null,
-        
+
         photoFinish: participants.length >= 2 ? (() => {
           // Actual photo finish - top 2 players finished within 10 seconds of each other
           const sorted = [...participants].sort((a, b) => b.score - a.score)
-          if (sorted.length >= 2 && 
-              sorted[0].score === sorted[1].score && 
+          if (sorted.length >= 2 &&
+              sorted[0].score === sorted[1].score &&
               Math.abs(sorted[0].timeSpent - sorted[1].timeSpent) <= 10) {
             return sorted[0]
           }
@@ -217,15 +217,30 @@ function Results() {
 
   if (!results) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/10 via-red-400/10 to-pink-400/10 animate-pulse"></div>
+      <div
+        className="min-h-screen flex items-center justify-center relative overflow-hidden"
+        style={{ background: 'linear-gradient(to bottom right, var(--primary-color), var(--accent-color), var(--secondary-color))' }}
+      >
+        <div
+          className="absolute inset-0 animate-pulse"
+          style={{ background: 'linear-gradient(to right, rgba(var(--celebration-color-rgb), 0.1), rgba(var(--error-color-rgb), 0.1), rgba(var(--accent-color-rgb), 0.1))' }}
+        ></div>
         <div className="text-center relative z-10">
-          <div className="animate-spin rounded-full h-16 w-16 border-4 border-yellow-400 border-t-transparent mx-auto mb-6"></div>
-          <p className="text-white text-2xl font-bold animate-pulse">🏆 Calculating Champions...</p>
-          <p className="text-yellow-200 text-lg mt-2">Tallying the scores!</p>
+          <div
+            className="animate-spin rounded-full h-16 w-16 border-4 border-t-transparent mx-auto mb-6"
+            style={{ borderColor: 'var(--celebration-color)', borderTopColor: 'transparent' }}
+          ></div>
+          <p className="text-2xl font-bold animate-pulse" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Calculating Champions...</p>
+          <p className="text-lg mt-2" style={{ color: 'var(--celebration-color-light)' }}>Tallying the scores!</p>
         </div>
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-yellow-400/20 rounded-full blur-3xl animate-bounce"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-400/20 rounded-full blur-3xl animate-bounce delay-1000"></div>
+        <div
+          className="absolute -top-40 -right-40 w-80 h-80 rounded-full blur-3xl animate-bounce"
+          style={{ background: 'rgba(var(--celebration-color-rgb), 0.2)' }}
+        ></div>
+        <div
+          className="absolute -bottom-40 -left-40 w-80 h-80 rounded-full blur-3xl animate-bounce delay-1000"
+          style={{ background: 'rgba(var(--accent-color-rgb), 0.2)' }}
+        ></div>
       </div>
     )
   }
@@ -237,32 +252,47 @@ function Results() {
   }
 
   return (
-    <div className="h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 relative overflow-hidden flex flex-col">
+    <div
+      className="h-screen relative overflow-hidden flex flex-col"
+      style={{ background: 'linear-gradient(to bottom right, var(--primary-color), var(--accent-color), var(--secondary-color))' }}
+    >
       {/* Subtle background elements */}
-      <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/5 via-red-400/5 to-pink-400/5"></div>
-      <div className="absolute bottom-20 right-20 w-40 h-40 bg-green-400/10 rounded-full blur-2xl animate-pulse delay-500"></div>
-      
-      <header className="relative z-10 bg-gradient-to-r from-yellow-500 to-orange-500 shadow-2xl border-b-4 border-red-400">
+      <div
+        className="absolute inset-0"
+        style={{ background: 'linear-gradient(to right, rgba(var(--celebration-color-rgb), 0.05), rgba(var(--error-color-rgb), 0.05), rgba(var(--accent-color-rgb), 0.05))' }}
+      ></div>
+      <div
+        className="absolute bottom-20 right-20 w-40 h-40 rounded-full blur-2xl animate-pulse delay-500"
+        style={{ background: 'rgba(var(--success-color-rgb), 0.1)' }}
+      ></div>
+
+      <header
+        className="relative z-10 shadow-2xl border-b-4"
+        style={{
+          background: 'linear-gradient(to right, var(--celebration-color), var(--warning-color))',
+          borderBottomColor: 'var(--error-color)'
+        }}
+      >
         <div className="container mx-auto px-4 py-3 flex-shrink-0">
           <div className="flex items-center justify-center gap-4">
             <div className="animate-bounce">
-              <Crown className="w-16 h-16 text-red-600 animate-spin" />
+              <Crown className="w-16 h-16 animate-spin" style={{ color: 'var(--error-color)' }} />
             </div>
             <div className="text-center">
-              <h1 className="text-3xl font-bold text-white drop-shadow-2xl animate-pulse">
-                🏆 {results.quiz.title}
+              <h1 className="text-3xl font-bold drop-shadow-2xl animate-pulse" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>
+                {results.quiz.title}
               </h1>
-              <p className="text-2xl font-bold text-red-200 mt-2">CHAMPIONS REVEALED!</p>
+              <p className="text-2xl font-bold mt-2" style={{ color: 'var(--error-color-light)' }}>CHAMPIONS REVEALED!</p>
               <div className="flex justify-center gap-2 mt-3">
-                <div className="animate-bounce">🎪</div>
-                <div className="animate-bounce delay-100">✨</div>
-                <div className="animate-bounce delay-200">🎉</div>
-                <div className="animate-bounce delay-300">🌟</div>
-                <div className="animate-bounce delay-400">🎊</div>
+                <div className="animate-bounce">*</div>
+                <div className="animate-bounce delay-100">*</div>
+                <div className="animate-bounce delay-200">*</div>
+                <div className="animate-bounce delay-300">*</div>
+                <div className="animate-bounce delay-400">*</div>
               </div>
             </div>
             <div className="animate-bounce delay-500">
-              <Trophy className="w-16 h-16 text-red-600 animate-pulse" />
+              <Trophy className="w-16 h-16 animate-pulse" style={{ color: 'var(--error-color)' }} />
             </div>
           </div>
         </div>
@@ -274,227 +304,374 @@ function Results() {
           <div className="text-center mb-8">
             <div className="flex items-center justify-center gap-4 mb-4">
               <div className="animate-bounce">
-                <Award className="w-12 h-12 text-yellow-400 animate-spin" />
+                <Award className="w-12 h-12 animate-spin" style={{ color: 'var(--celebration-color)' }} />
               </div>
-              <h2 className="text-2xl font-bold text-white drop-shadow-lg">
-                🎪 AWARDS CEREMONY 🎪
+              <h2 className="text-2xl font-bold drop-shadow-lg" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>
+                AWARDS CEREMONY
               </h2>
               <div className="animate-bounce delay-500">
-                <Star className="w-12 h-12 text-yellow-400 animate-pulse" />
+                <Star className="w-12 h-12 animate-pulse" style={{ color: 'var(--celebration-color)' }} />
               </div>
             </div>
-            <p className="text-yellow-200 text-xl font-semibold">Celebrating Our Champions!</p>
+            <p className="text-xl font-semibold" style={{ color: 'var(--celebration-color-light)' }}>Celebrating Our Champions!</p>
           </div>
-          
+
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="bg-gradient-to-br from-yellow-500/90 to-orange-600/90 backdrop-blur-sm text-white p-4 rounded-xl text-center border-2 border-yellow-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse">
+            {/* Speed Demon Award */}
+            <div
+              className="backdrop-blur-sm p-4 rounded-xl text-center border-2 shadow-2xl transform hover:scale-110 transition-all animate-pulse"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--celebration-color-rgb), 0.9), rgba(var(--warning-color-rgb), 0.9))',
+                borderColor: 'var(--celebration-color-light)',
+                color: 'var(--text-on-primary-color, #ffffff)'
+              }}
+            >
               <div className="animate-bounce mb-4">
-                <Zap className="w-12 h-12 mx-auto text-yellow-200" />
+                <Zap className="w-12 h-12 mx-auto" style={{ color: 'var(--celebration-color-light)' }} />
               </div>
-              <h3 className="font-bold text-xl mb-3">⚡ SPEED DEMON</h3>
-              <div className="bg-white/20 rounded-lg p-3 mb-3">
+              <h3 className="font-bold text-xl mb-3">SPEED DEMON</h3>
+              <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                 <p className="text-lg font-bold">{results.awards.speedDemon?.name || 'N/A'}</p>
               </div>
               <p className="text-2xl font-bold animate-pulse">{results.awards.speedDemon?.avgTime ? `${results.awards.speedDemon.avgTime}s avg` : '--'}</p>
-              <div className="mt-3 text-2xl animate-bounce">💨</div>
+              <div className="mt-3 text-2xl animate-bounce">*</div>
             </div>
-            
-            <div className="bg-gradient-to-br from-green-500/90 to-emerald-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-green-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-200">
+
+            {/* Perfectionist Award */}
+            <div
+              className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-200"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--success-color-rgb), 0.9), rgba(var(--success-color-dark-rgb), 0.9))',
+                borderColor: 'var(--success-color-light)',
+                color: 'var(--text-on-primary-color, #ffffff)'
+              }}
+            >
               <div className="animate-bounce mb-4">
-                <Target className="w-12 h-12 mx-auto text-green-200" />
+                <Target className="w-12 h-12 mx-auto" style={{ color: 'var(--success-color-light)' }} />
               </div>
-              <h3 className="font-bold text-xl mb-3">🎯 PERFECTIONIST</h3>
-              <div className="bg-white/20 rounded-lg p-3 mb-3">
+              <h3 className="font-bold text-xl mb-3">PERFECTIONIST</h3>
+              <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                 <p className="text-lg font-bold">{results.awards.perfectionist?.name || 'N/A'}</p>
               </div>
               <p className="text-2xl font-bold animate-pulse">{results.awards.perfectionist?.score || 0}%</p>
-              <div className="mt-3 text-2xl animate-bounce">🎆</div>
+              <div className="mt-3 text-2xl animate-bounce">*</div>
             </div>
-            
-            <div className="bg-gradient-to-br from-purple-500/90 to-pink-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-purple-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-400">
+
+            {/* Streak Master Award */}
+            <div
+              className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-400"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--accent-color-rgb), 0.9), rgba(var(--accent-color-dark-rgb), 0.9))',
+                borderColor: 'var(--accent-color-light)',
+                color: 'var(--text-on-primary-color, #ffffff)'
+              }}
+            >
               <div className="animate-bounce mb-4">
-                <TrendingUp className="w-12 h-12 mx-auto text-purple-200" />
+                <TrendingUp className="w-12 h-12 mx-auto" style={{ color: 'var(--accent-color-light)' }} />
               </div>
-              <h3 className="font-bold text-xl mb-3">📈 STREAK MASTER</h3>
-              <div className="bg-white/20 rounded-lg p-3 mb-3">
+              <h3 className="font-bold text-xl mb-3">STREAK MASTER</h3>
+              <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                 <p className="text-lg font-bold">{results.awards.streakMaster?.name || 'N/A'}</p>
               </div>
               <p className="text-2xl font-bold animate-pulse">{results.awards.streakMaster?.streak || 0} in a row</p>
-              <div className="mt-3 text-2xl animate-bounce">🔥</div>
+              <div className="mt-3 text-2xl animate-bounce">*</div>
             </div>
-            
-            <div className="bg-gradient-to-br from-red-500/90 to-pink-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-red-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-600">
+
+            {/* Photo Finish Award */}
+            <div
+              className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-600"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--error-color-rgb), 0.9), rgba(var(--accent-color-rgb), 0.9))',
+                borderColor: 'var(--error-color-light)',
+                color: 'var(--text-on-primary-color, #ffffff)'
+              }}
+            >
               <div className="animate-bounce mb-4">
-                <Clock className="w-12 h-12 mx-auto text-red-200" />
+                <Clock className="w-12 h-12 mx-auto" style={{ color: 'var(--error-color-light)' }} />
               </div>
-              <h3 className="font-bold text-xl mb-3">📸 PHOTO FINISH</h3>
-              <div className="bg-white/20 rounded-lg p-3 mb-3">
+              <h3 className="font-bold text-xl mb-3">PHOTO FINISH</h3>
+              <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                 <p className="text-lg font-bold">{results.awards.photoFinish?.name || 'N/A'}</p>
               </div>
               <p className="text-2xl font-bold animate-pulse">{results.awards.photoFinish ? 'Tied at the top!' : 'Gave it their all!'}</p>
-              <div className="mt-3 text-2xl animate-bounce">🎖️</div>
+              <div className="mt-3 text-2xl animate-bounce">*</div>
             </div>
           </div>
-          
+
           {/* New Awards Row */}
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mt-6">
             {results.awards.closeCall && (
-              <div className="bg-gradient-to-br from-indigo-500/90 to-blue-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-indigo-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse">
+              <div
+                className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse"
+                style={{
+                  background: 'linear-gradient(to bottom right, rgba(var(--secondary-color-rgb), 0.9), rgba(var(--info-color-rgb), 0.9))',
+                  borderColor: 'var(--secondary-color-light)',
+                  color: 'var(--text-on-primary-color, #ffffff)'
+                }}
+              >
                 <div className="animate-bounce mb-4">
-                  <Trophy className="w-12 h-12 mx-auto text-indigo-200" />
+                  <Trophy className="w-12 h-12 mx-auto" style={{ color: 'var(--secondary-color-light)' }} />
                 </div>
-                <h3 className="font-bold text-xl mb-3">🏃 CLOSE CALL</h3>
-                <div className="bg-white/20 rounded-lg p-3 mb-3">
+                <h3 className="font-bold text-xl mb-3">CLOSE CALL</h3>
+                <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                   <p className="text-lg font-bold">{results.awards.closeCall.name}</p>
                 </div>
                 <p className="text-2xl font-bold animate-pulse">Almost had it!</p>
-                <div className="mt-3 text-2xl animate-bounce">🥈</div>
+                <div className="mt-3 text-2xl animate-bounce">*</div>
               </div>
             )}
-            
+
             {results.awards.lightningRound && (
-              <div className="bg-gradient-to-br from-cyan-500/90 to-teal-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-cyan-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-200">
+              <div
+                className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-200"
+                style={{
+                  background: 'linear-gradient(to bottom right, rgba(var(--info-color-rgb), 0.9), rgba(var(--info-color-dark-rgb), 0.9))',
+                  borderColor: 'var(--info-color-light)',
+                  color: 'var(--text-on-primary-color, #ffffff)'
+                }}
+              >
                 <div className="animate-bounce mb-4">
-                  <Zap className="w-12 h-12 mx-auto text-cyan-200" />
+                  <Zap className="w-12 h-12 mx-auto" style={{ color: 'var(--info-color-light)' }} />
                 </div>
-                <h3 className="font-bold text-xl mb-3">⚡ LIGHTNING ROUND</h3>
-                <div className="bg-white/20 rounded-lg p-3 mb-3">
+                <h3 className="font-bold text-xl mb-3">LIGHTNING ROUND</h3>
+                <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                   <p className="text-lg font-bold">{results.awards.lightningRound.name}</p>
                 </div>
                 <p className="text-2xl font-bold animate-pulse">Most efficient!</p>
-                <div className="mt-3 text-2xl animate-bounce">⚡</div>
+                <div className="mt-3 text-2xl animate-bounce">*</div>
               </div>
             )}
-            
+
             {results.awards.comebackKid && (
-              <div className="bg-gradient-to-br from-amber-500/90 to-orange-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-amber-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-400">
+              <div
+                className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-400"
+                style={{
+                  background: 'linear-gradient(to bottom right, rgba(var(--warning-color-rgb), 0.9), rgba(var(--warning-color-dark-rgb), 0.9))',
+                  borderColor: 'var(--warning-color-light)',
+                  color: 'var(--text-on-primary-color, #ffffff)'
+                }}
+              >
                 <div className="animate-bounce mb-4">
-                  <TrendingUp className="w-12 h-12 mx-auto text-amber-200" />
+                  <TrendingUp className="w-12 h-12 mx-auto" style={{ color: 'var(--warning-color-light)' }} />
                 </div>
-                <h3 className="font-bold text-xl mb-3">📈 COMEBACK KID</h3>
-                <div className="bg-white/20 rounded-lg p-3 mb-3">
+                <h3 className="font-bold text-xl mb-3">COMEBACK KID</h3>
+                <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                   <p className="text-lg font-bold">{results.awards.comebackKid.name}</p>
                 </div>
                 <p className="text-2xl font-bold animate-pulse">Never gave up!</p>
-                <div className="mt-3 text-2xl animate-bounce">💪</div>
+                <div className="mt-3 text-2xl animate-bounce">*</div>
               </div>
             )}
-            
+
             {results.awards.steadyEddie && (
-              <div className="bg-gradient-to-br from-slate-500/90 to-gray-600/90 backdrop-blur-sm text-white p-8 rounded-2xl text-center border-4 border-slate-300 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-600">
+              <div
+                className="backdrop-blur-sm p-8 rounded-2xl text-center border-4 shadow-2xl transform hover:scale-110 transition-all animate-pulse delay-600"
+                style={{
+                  background: 'linear-gradient(to bottom right, rgba(var(--neutral-color-rgb), 0.9), rgba(var(--neutral-color-dark-rgb), 0.9))',
+                  borderColor: 'var(--neutral-color-light)',
+                  color: 'var(--text-on-primary-color, #ffffff)'
+                }}
+              >
                 <div className="animate-bounce mb-4">
-                  <Clock className="w-12 h-12 mx-auto text-slate-200" />
+                  <Clock className="w-12 h-12 mx-auto" style={{ color: 'var(--neutral-color-light)' }} />
                 </div>
-                <h3 className="font-bold text-xl mb-3">⏱️ STEADY EDDIE</h3>
-                <div className="bg-white/20 rounded-lg p-3 mb-3">
+                <h3 className="font-bold text-xl mb-3">STEADY EDDIE</h3>
+                <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }}>
                   <p className="text-lg font-bold">{results.awards.steadyEddie.name}</p>
                 </div>
                 <p className="text-2xl font-bold animate-pulse">Consistent timing!</p>
-                <div className="mt-3 text-2xl animate-bounce">🎯</div>
+                <div className="mt-3 text-2xl animate-bounce">*</div>
               </div>
             )}
           </div>
         </div>
 
         {/* Epic Stats Overview */}
-        <div className="bg-gradient-to-br from-cyan-800/90 to-blue-800/90 backdrop-blur-sm rounded-xl shadow-2xl p-4 mb-6 border-2 border-cyan-400/30">
+        <div
+          className="backdrop-blur-sm rounded-xl shadow-2xl p-4 mb-6 border-2"
+          style={{
+            background: 'linear-gradient(to bottom right, rgba(var(--info-color-rgb), 0.9), rgba(var(--info-color-dark-rgb), 0.9))',
+            borderColor: 'rgba(var(--info-color-rgb), 0.3)'
+          }}
+        >
           <div className="flex items-center gap-3 mb-8">
             <div className="animate-pulse">
-              <Medal className="w-10 h-10 text-cyan-400" />
+              <Medal className="w-10 h-10" style={{ color: 'var(--info-color)' }} />
             </div>
-            <h2 className="text-3xl font-bold text-white">📊 BATTLE STATISTICS</h2>
+            <h2 className="text-3xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>BATTLE STATISTICS</h2>
           </div>
-          
+
           <div className="grid md:grid-cols-4 gap-8">
-            <div className="text-center bg-gradient-to-br from-blue-500/30 to-cyan-500/30 rounded-xl p-6 border-2 border-blue-400/50">
-              <div className="text-3xl font-bold text-blue-300 animate-pulse mb-1">{results.stats.totalParticipants}</div>
-              <div className="text-white text-lg font-semibold">👥 Warriors</div>
+            <div
+              className="text-center rounded-xl p-6 border-2"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--info-color-rgb), 0.3), rgba(var(--info-color-rgb), 0.3))',
+                borderColor: 'rgba(var(--info-color-rgb), 0.5)'
+              }}
+            >
+              <div className="text-3xl font-bold animate-pulse mb-1" style={{ color: 'var(--info-color-light)' }}>{results.stats.totalParticipants}</div>
+              <div className="text-lg font-semibold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Warriors</div>
             </div>
-            
-            <div className="text-center bg-gradient-to-br from-green-500/30 to-emerald-500/30 rounded-xl p-6 border-2 border-green-400/50">
-              <div className="text-5xl font-bold text-green-300 animate-pulse mb-2">{results.stats.averageScore}%</div>
-              <div className="text-white text-lg font-semibold">💯 Arena Average</div>
+
+            <div
+              className="text-center rounded-xl p-6 border-2"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--success-color-rgb), 0.3), rgba(var(--success-color-rgb), 0.3))',
+                borderColor: 'rgba(var(--success-color-rgb), 0.5)'
+              }}
+            >
+              <div className="text-5xl font-bold animate-pulse mb-2" style={{ color: 'var(--success-color-light)' }}>{results.stats.averageScore}%</div>
+              <div className="text-lg font-semibold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Arena Average</div>
             </div>
-            
-            <div className="text-center bg-gradient-to-br from-purple-500/30 to-pink-500/30 rounded-xl p-6 border-2 border-purple-400/50">
-              <div className="text-5xl font-bold text-purple-300 animate-pulse mb-2">{formatTime(results.stats.averageTime)}</div>
-              <div className="text-white text-lg font-semibold">⏱️ Battle Time</div>
+
+            <div
+              className="text-center rounded-xl p-6 border-2"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--accent-color-rgb), 0.3), rgba(var(--accent-color-rgb), 0.3))',
+                borderColor: 'rgba(var(--accent-color-rgb), 0.5)'
+              }}
+            >
+              <div className="text-5xl font-bold animate-pulse mb-2" style={{ color: 'var(--accent-color-light)' }}>{formatTime(results.stats.averageTime)}</div>
+              <div className="text-lg font-semibold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Battle Time</div>
             </div>
-            
-            <div className="text-center bg-gradient-to-br from-orange-500/30 to-red-500/30 rounded-xl p-6 border-2 border-orange-400/50">
-              <div className="text-5xl font-bold text-orange-300 animate-pulse mb-2">{results.stats.perfectScores}</div>
-              <div className="text-white text-lg font-semibold">🎆 Perfect Scores</div>
+
+            <div
+              className="text-center rounded-xl p-6 border-2"
+              style={{
+                background: 'linear-gradient(to bottom right, rgba(var(--warning-color-rgb), 0.3), rgba(var(--error-color-rgb), 0.3))',
+                borderColor: 'rgba(var(--warning-color-rgb), 0.5)'
+              }}
+            >
+              <div className="text-5xl font-bold animate-pulse mb-2" style={{ color: 'var(--warning-color-light)' }}>{results.stats.perfectScores}</div>
+              <div className="text-lg font-semibold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Perfect Scores</div>
             </div>
           </div>
         </div>
 
         {/* Epic Toggle Buttons */}
         <div className="flex justify-center mb-8">
-          <div className="bg-gradient-to-r from-indigo-600/90 to-purple-600/90 backdrop-blur-sm rounded-2xl p-2 shadow-2xl border-2 border-purple-400/50">
-            <button 
+          <div
+            className="backdrop-blur-sm rounded-2xl p-2 shadow-2xl border-2"
+            style={{
+              background: 'linear-gradient(to right, rgba(var(--secondary-color-rgb), 0.9), rgba(var(--accent-color-rgb), 0.9))',
+              borderColor: 'rgba(var(--accent-color-rgb), 0.5)'
+            }}
+          >
+            <button
               onClick={() => setShowLeaderboard(true)}
               className={`px-8 py-4 rounded-xl font-bold text-lg transition-all transform hover:scale-105 ${
-                showLeaderboard ? 'bg-gradient-to-r from-yellow-500 to-orange-500 text-white shadow-lg animate-pulse' : 'text-white hover:bg-white/20'
+                showLeaderboard ? 'shadow-lg animate-pulse' : ''
               }`}
+              style={showLeaderboard
+                ? { background: 'linear-gradient(to right, var(--celebration-color), var(--warning-color))', color: 'var(--text-on-primary-color, #ffffff)' }
+                : { color: 'var(--text-on-primary-color, #ffffff)' }}
             >
-              🏆 HALL OF FAME
+              HALL OF FAME
             </button>
-            <button 
+            <button
               onClick={() => setShowLeaderboard(false)}
               className={`px-8 py-4 rounded-xl font-bold text-lg transition-all transform hover:scale-105 ${
-                !showLeaderboard ? 'bg-gradient-to-r from-yellow-500 to-orange-500 text-white shadow-lg animate-pulse' : 'text-white hover:bg-white/20'
+                !showLeaderboard ? 'shadow-lg animate-pulse' : ''
               }`}
+              style={!showLeaderboard
+                ? { background: 'linear-gradient(to right, var(--celebration-color), var(--warning-color))', color: 'var(--text-on-primary-color, #ffffff)' }
+                : { color: 'var(--text-on-primary-color, #ffffff)' }}
             >
-              📊 BATTLE STATS
+              BATTLE STATS
             </button>
           </div>
         </div>
 
         {/* Epic Results Display */}
-        <div className="bg-gradient-to-br from-red-800/90 to-pink-800/90 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-pink-400/30">
+        <div
+          className="backdrop-blur-sm rounded-2xl shadow-2xl border-2"
+          style={{
+            background: 'linear-gradient(to bottom right, rgba(var(--error-color-rgb), 0.9), rgba(var(--accent-color-rgb), 0.9))',
+            borderColor: 'rgba(var(--accent-color-rgb), 0.3)'
+          }}
+        >
           {showLeaderboard ? (
             <div className="p-8">
               <div className="flex items-center justify-center gap-4 mb-8">
                 <div className="animate-bounce">
-                  <Trophy className="w-12 h-12 text-yellow-400 animate-spin" />
+                  <Trophy className="w-12 h-12 animate-spin" style={{ color: 'var(--celebration-color)' }} />
                 </div>
-                <h2 className="text-4xl font-bold text-white drop-shadow-lg">
-                  🏆 HALL OF CHAMPIONS
+                <h2 className="text-4xl font-bold drop-shadow-lg" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>
+                  HALL OF CHAMPIONS
                 </h2>
                 <div className="animate-bounce delay-500">
-                  <Crown className="w-12 h-12 text-yellow-400 animate-pulse" />
+                  <Crown className="w-12 h-12 animate-pulse" style={{ color: 'var(--celebration-color)' }} />
                 </div>
               </div>
-              
+
               <div className="space-y-6">
                 {results.participants.map((participant, index) => (
-                  <div key={index} className={`flex items-center justify-between p-6 rounded-2xl transform hover:scale-105 transition-all border-2 ${
-                    index === 0 ? 'bg-gradient-to-r from-yellow-500/40 to-orange-500/40 border-yellow-400 animate-pulse shadow-2xl' :
-                    index === 1 ? 'bg-gradient-to-r from-gray-400/40 to-slate-500/40 border-gray-300 shadow-xl' :
-                    index === 2 ? 'bg-gradient-to-r from-orange-500/40 to-red-500/40 border-orange-400 shadow-xl' :
-                    'bg-gradient-to-r from-indigo-500/30 to-purple-500/30 border-indigo-400/50 shadow-lg'
-                  }`}>
+                  <div
+                    key={index}
+                    className={`flex items-center justify-between p-6 rounded-2xl transform hover:scale-105 transition-all border-2 ${
+                      index === 0 ? 'animate-pulse shadow-2xl' :
+                      'shadow-xl'
+                    }`}
+                    style={
+                      index === 0 ? {
+                        background: 'linear-gradient(to right, rgba(var(--celebration-color-rgb), 0.4), rgba(var(--warning-color-rgb), 0.4))',
+                        borderColor: 'var(--celebration-color)'
+                      } :
+                      index === 1 ? {
+                        background: 'linear-gradient(to right, rgba(var(--neutral-color-rgb), 0.4), rgba(var(--neutral-color-dark-rgb), 0.4))',
+                        borderColor: 'var(--neutral-color-light)'
+                      } :
+                      index === 2 ? {
+                        background: 'linear-gradient(to right, rgba(var(--warning-color-rgb), 0.4), rgba(var(--error-color-rgb), 0.4))',
+                        borderColor: 'var(--warning-color)'
+                      } : {
+                        background: 'linear-gradient(to right, rgba(var(--secondary-color-rgb), 0.3), rgba(var(--accent-color-rgb), 0.3))',
+                        borderColor: 'rgba(var(--secondary-color-rgb), 0.5)'
+                      }
+                    }
+                  >
                     <div className="flex items-center gap-6">
-                      <div className={`w-16 h-16 rounded-full flex items-center justify-center font-bold text-2xl border-4 ${
-                        index === 0 ? 'bg-gradient-to-br from-yellow-400 to-orange-500 text-white border-yellow-300 animate-bounce shadow-lg' :
-                        index === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-500 text-white border-gray-200 shadow-lg' :
-                        index === 2 ? 'bg-gradient-to-br from-orange-400 to-red-500 text-white border-orange-300 shadow-lg' :
-                        'bg-gradient-to-br from-indigo-400 to-purple-500 text-white border-indigo-300 shadow-md'
-                      }`}>
-                        {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}
+                      <div
+                        className={`w-16 h-16 rounded-full flex items-center justify-center font-bold text-2xl border-4 ${
+                          index === 0 ? 'animate-bounce shadow-lg' :
+                          'shadow-lg'
+                        }`}
+                        style={
+                          index === 0 ? {
+                            background: 'linear-gradient(to bottom right, var(--celebration-color), var(--warning-color))',
+                            borderColor: 'var(--celebration-color-light)',
+                            color: 'var(--text-on-primary-color, #ffffff)'
+                          } :
+                          index === 1 ? {
+                            background: 'linear-gradient(to bottom right, var(--neutral-color-light), var(--neutral-color))',
+                            borderColor: 'var(--neutral-color-light)',
+                            color: 'var(--text-on-primary-color, #ffffff)'
+                          } :
+                          index === 2 ? {
+                            background: 'linear-gradient(to bottom right, var(--warning-color), var(--error-color))',
+                            borderColor: 'var(--warning-color-light)',
+                            color: 'var(--text-on-primary-color, #ffffff)'
+                          } : {
+                            background: 'linear-gradient(to bottom right, var(--secondary-color), var(--accent-color))',
+                            borderColor: 'var(--secondary-color-light)',
+                            color: 'var(--text-on-primary-color, #ffffff)'
+                          }
+                        }
+                      >
+                        {index === 0 ? '1' : index === 1 ? '2' : index === 2 ? '3' : index + 1}
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-white mb-1">{participant.name}</div>
+                        <div className="text-2xl font-bold mb-1" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{participant.name}</div>
                         <div className="flex items-center gap-4">
-                          <span className="text-yellow-300 font-semibold">🔥 Streak: {participant.streak}</span>
-                          {participant.score === 100 && <span className="text-green-300 font-bold animate-pulse">✨ PERFECT!</span>}
+                          <span className="font-semibold" style={{ color: 'var(--celebration-color)' }}>Streak: {participant.streak}</span>
+                          {participant.score === 100 && <span className="font-bold animate-pulse" style={{ color: 'var(--success-color-light)' }}>PERFECT!</span>}
                         </div>
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-3xl font-bold text-yellow-300 animate-pulse mb-1">{participant.score}%</div>
-                      <div className="text-lg text-white font-semibold">⏱️ {formatTime(participant.timeSpent)}</div>
-                      {index === 0 && <div className="mt-2 text-2xl animate-bounce">🎆</div>}
+                      <div className="text-3xl font-bold animate-pulse mb-1" style={{ color: 'var(--celebration-color)' }}>{participant.score}%</div>
+                      <div className="text-lg font-semibold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{formatTime(participant.timeSpent)}</div>
+                      {index === 0 && <div className="mt-2 text-2xl animate-bounce">*</div>}
                     </div>
                   </div>
                 ))}
@@ -504,47 +681,53 @@ function Results() {
             <div className="p-8">
               <div className="flex items-center justify-center gap-4 mb-8">
                 <div className="animate-pulse">
-                  <Target className="w-10 h-10 text-cyan-400" />
+                  <Target className="w-10 h-10" style={{ color: 'var(--info-color)' }} />
                 </div>
-                <h2 className="text-3xl font-bold text-white">📊 WARRIOR ANALYTICS</h2>
+                <h2 className="text-3xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>WARRIOR ANALYTICS</h2>
               </div>
-              
+
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b-2 border-cyan-400/50">
-                      <th className="text-left py-4 text-white text-xl font-bold">👥 Warrior</th>
-                      <th className="text-center py-4 text-white text-xl font-bold">🎯 Score</th>
-                      <th className="text-center py-4 text-white text-xl font-bold">⏱️ Time</th>
-                      <th className="text-center py-4 text-white text-xl font-bold">🔥 Streak</th>
-                      <th className="text-center py-4 text-white text-xl font-bold">🎲 Accuracy</th>
+                    <tr style={{ borderBottom: '2px solid rgba(var(--info-color-rgb), 0.5)' }}>
+                      <th className="text-left py-4 text-xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Warrior</th>
+                      <th className="text-center py-4 text-xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Score</th>
+                      <th className="text-center py-4 text-xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Time</th>
+                      <th className="text-center py-4 text-xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Streak</th>
+                      <th className="text-center py-4 text-xl font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Accuracy</th>
                     </tr>
                   </thead>
                   <tbody>
                     {results.participants.map((participant, index) => (
-                      <tr key={index} className={`border-b border-white/20 hover:bg-white/10 transition-all ${
-                        index === 0 ? 'bg-yellow-500/20' : ''
-                      }`}>
+                      <tr
+                        key={index}
+                        className="border-b transition-all"
+                        style={index === 0 ? { borderColor: 'rgba(255, 255, 255, 0.2)', background: 'rgba(var(--celebration-color-rgb), 0.2)' } : { borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = index === 0 ? 'rgba(var(--celebration-color-rgb), 0.2)' : 'transparent'}
+                      >
                         <td className="py-4">
                           <div className="flex items-center gap-3">
                             <span className="text-2xl">
-                              {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👊'}
+                              {index === 0 ? '1st' : index === 1 ? '2nd' : index === 2 ? '3rd' : '*'}
                             </span>
-                            <span className="text-white font-bold text-lg">{participant.name}</span>
+                            <span className="font-bold text-lg" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{participant.name}</span>
                           </div>
                         </td>
                         <td className="text-center py-4">
-                          <span className={`font-bold text-xl ${
-                            participant.score === 100 ? 'text-green-300 animate-pulse' :
-                            participant.score >= 80 ? 'text-yellow-300' :
-                            'text-white'
-                          }`}>
+                          <span
+                            className={`font-bold text-xl ${participant.score === 100 ? 'animate-pulse' : ''}`}
+                            style={{
+                              color: participant.score === 100 ? 'var(--success-color-light)' :
+                                     participant.score >= 80 ? 'var(--celebration-color)' : 'var(--text-on-primary-color, #ffffff)'
+                            }}
+                          >
                             {participant.score}%
                           </span>
                         </td>
-                        <td className="text-center py-4 text-cyan-300 font-semibold text-lg">{formatTime(participant.timeSpent)}</td>
-                        <td className="text-center py-4 text-orange-300 font-bold text-lg">{participant.streak}</td>
-                        <td className="text-center py-4 text-purple-300 font-semibold text-lg">
+                        <td className="text-center py-4 font-semibold text-lg" style={{ color: 'var(--info-color-light)' }}>{formatTime(participant.timeSpent)}</td>
+                        <td className="text-center py-4 font-bold text-lg" style={{ color: 'var(--warning-color-light)' }}>{participant.streak}</td>
+                        <td className="text-center py-4 font-semibold text-lg" style={{ color: 'var(--accent-color-light)' }}>
                           {Math.round((participant.score / 100) * results.quiz.totalQuestions)}/{results.quiz.totalQuestions}
                         </td>
                       </tr>

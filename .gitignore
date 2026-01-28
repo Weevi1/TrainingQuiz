@@ -32,3 +32,6 @@ npm-debug.log*
 
 # Netlify
 .netlify/
+# Firebase service account - NEVER COMMIT
+service-account.json
+*.json.backup

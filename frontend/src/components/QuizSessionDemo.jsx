@@ -3,7 +3,7 @@ import QRCode from 'react-qr-code'
 import { Users, Clock, Play, Square, Trophy, Target, X, ArrowLeft } from 'lucide-react'
 
 // Standalone QuizSession component for Storybook (no router dependencies)
-function QuizSessionDemo({ 
+function QuizSessionDemo({
   sessionStatus = 'waiting',
   quizTitle = 'Employment Law Fundamentals',
   participants = [],
@@ -13,7 +13,7 @@ function QuizSessionDemo({
   questionCount = 10
 }) {
   const [status, setStatus] = useState(sessionStatus)
-  
+
   const sessionUrl = `${window.location.origin}/quiz/${sessionCode}`
 
   const startSession = () => setStatus('active')
@@ -24,12 +24,24 @@ function QuizSessionDemo({
   const loadParticipants = () => console.log('Refresh participants')
 
   return (
-    <div className="w-screen h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 relative overflow-hidden flex flex-col">
+    <div
+      className="w-screen h-screen relative overflow-hidden flex flex-col"
+      style={{ background: 'var(--game-gradient, linear-gradient(to bottom right, #581c87, #1e3a8a, #312e81))' }}
+    >
       {/* Animated background elements */}
-      <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/10 via-red-400/10 to-pink-400/10 animate-pulse"></div>
-      <div className="absolute -top-40 -right-40 w-80 h-80 bg-yellow-400/20 rounded-full blur-3xl animate-bounce"></div>
-      <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-400/20 rounded-full blur-3xl animate-bounce delay-1000"></div>
-      
+      <div
+        className="absolute inset-0 animate-pulse"
+        style={{ background: 'var(--celebration-gradient, linear-gradient(to right, rgba(250, 204, 21, 0.1), rgba(248, 113, 113, 0.1), rgba(244, 114, 182, 0.1)))' }}
+      ></div>
+      <div
+        className="absolute -top-40 -right-40 w-80 h-80 rounded-full blur-3xl animate-bounce"
+        style={{ backgroundColor: 'var(--accent-glow, rgba(250, 204, 21, 0.2))' }}
+      ></div>
+      <div
+        className="absolute -bottom-40 -left-40 w-80 h-80 rounded-full blur-3xl animate-bounce delay-1000"
+        style={{ backgroundColor: 'var(--secondary-glow, rgba(192, 132, 252, 0.2))' }}
+      ></div>
+
       <header className="relative z-10 bg-gb-navy shadow-2xl border-b-4 border-gb-gold flex-shrink-0 h-20">
         <div className="w-full px-4 py-2 h-full">
           <div className="flex justify-between items-center h-full">
@@ -40,8 +52,11 @@ function QuizSessionDemo({
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all ${
                   status === 'active' || status === 'completed'
                     ? 'text-gb-gold/30 cursor-not-allowed'
-                    : 'text-gb-gold hover:bg-gb-gold/20 hover:text-white'
+                    : 'text-gb-gold hover:bg-gb-gold/20'
                 }`}
+                style={
+                  status !== 'active' && status !== 'completed' ? { '--hover-color': 'var(--text-on-primary-color, #ffffff)' } : {}
+                }
               >
                 <ArrowLeft className="w-5 h-5" />
                 <span className="hidden sm:inline">Back</span>
@@ -55,17 +70,29 @@ function QuizSessionDemo({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <div className={`px-3 py-2 rounded-lg text-sm font-semibold tracking-wide shadow-lg transition-all ${
-                status === 'waiting' ? 'bg-gb-gold text-gb-navy' :
-                status === 'active' ? 'bg-green-600 text-white animate-pulse' :
-                'bg-gray-600 text-white'
-              }`}>
+              <div
+                className={`px-3 py-2 rounded-lg text-sm font-semibold tracking-wide shadow-lg transition-all ${
+                  status === 'waiting' ? 'bg-gb-gold text-gb-navy' :
+                  status === 'active' ? 'animate-pulse' :
+                  ''
+                }`}
+                style={
+                  status === 'active' ? {
+                    backgroundColor: 'var(--success-color, #16a34a)',
+                    color: 'var(--success-text-color, #ffffff)'
+                  } :
+                  status === 'completed' ? {
+                    backgroundColor: 'var(--secondary-color, #4b5563)',
+                    color: 'var(--secondary-text-color, #ffffff)'
+                  } : {}
+                }
+              >
                 {status === 'waiting' && 'Ready to Start'}
                 {status === 'active' && '● LIVE'}
                 {status === 'completed' && '✓ Completed'}
               </div>
               {status === 'waiting' && (
-                <button 
+                <button
                   onClick={startSession}
                   className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg font-bold hover:bg-gb-gold-light flex items-center gap-2 shadow-lg transition-all"
                 >
@@ -74,16 +101,20 @@ function QuizSessionDemo({
                 </button>
               )}
               {status === 'active' && (
-                <button 
+                <button
                   onClick={stopSession}
-                  className="bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 flex items-center gap-2 shadow-lg transition-all"
+                  className="px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-lg transition-all"
+                  style={{
+                    backgroundColor: 'var(--error-color, #dc2626)',
+                    color: 'var(--error-text-color, #ffffff)'
+                  }}
                 >
                   <Square className="w-5 h-5" />
                   End Quiz
                 </button>
               )}
               {status === 'completed' && (
-                <button 
+                <button
                   onClick={viewResults}
                   className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg font-bold hover:bg-gb-gold-light flex items-center gap-2 shadow-lg transition-all"
                 >
@@ -109,7 +140,7 @@ function QuizSessionDemo({
                     <Users className="w-4 h-4 text-gb-navy" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-white">Training Participants</h2>
+                    <h2 className="text-lg font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Training Participants</h2>
                     <p className="text-gb-gold text-xs font-medium">Live Session Management</p>
                   </div>
                 </div>
@@ -127,45 +158,50 @@ function QuizSessionDemo({
                   </div>
                   <div>
                     <span className="text-xl font-bold text-gb-gold">{participants.length}</span>
-                    <span className="text-white text-xs font-medium ml-2">Active Participants</span>
+                    <span className="text-xs font-medium ml-2" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Active Participants</span>
                   </div>
                 </div>
                 <div className="text-right">
                   <div className="text-xs text-gb-gold/80 uppercase tracking-wide">Gustav Barkhuysen</div>
-                  <div className="text-xs text-white font-medium">Training Session</div>
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Training Session</div>
                 </div>
               </div>
-              
+
               <div className="space-y-1 flex-1 overflow-y-auto min-h-0">
                 {participants.length === 0 ? (
                   <div className="text-center py-6 bg-gb-gold/5 rounded-xl border border-gb-gold/20 h-full flex flex-col items-center justify-center">
                     <div className="bg-gb-gold/10 p-3 rounded-full w-16 h-16 mx-auto mb-3 flex items-center justify-center">
                       <Users className="w-8 h-8 text-gb-gold" />
                     </div>
-                    <p className="text-white text-base font-bold mb-1">Awaiting Training Participants</p>
+                    <p className="text-base font-bold mb-1" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Awaiting Training Participants</p>
                     <p className="text-gb-gold/80 text-xs">Share QR code to begin session</p>
                   </div>
                 ) : (
                   participants.map((participant, index) => (
-                    <div key={participant.id} className="flex items-center justify-between py-2 px-3 bg-white/5 hover:bg-white/10 rounded-lg border border-gb-gold/20 transition-all group">
+                    <div
+                      key={participant.id}
+                      className="flex items-center justify-between py-2 px-3 rounded-lg border border-gb-gold/20 transition-all group"
+                      style={{ backgroundColor: 'var(--surface-color-5, rgba(255, 255, 255, 0.05))' }}
+                    >
                       <div className="flex items-center gap-3">
                         <div className="w-6 h-6 bg-gb-gold rounded-lg flex items-center justify-center text-gb-navy font-bold text-xs shadow-lg">
                           {index + 1}
                         </div>
                         <div>
-                          <span className="text-white font-bold text-sm">{participant.name}</span>
+                          <span className="font-bold text-sm" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{participant.name}</span>
                           <div className="flex items-center gap-1 mt-0.5">
                             <span className="text-gb-gold text-xs font-medium bg-gb-gold/10 px-1.5 py-0.5 rounded">✓ Ready</span>
-                            <span className="text-white/60 text-xs">Training Participant</span>
+                            <span className="text-xs" style={{ color: 'var(--text-on-primary-color-60, rgba(255, 255, 255, 0.6))' }}>Training Participant</span>
                           </div>
                         </div>
                       </div>
                       <button
                         onClick={() => kickParticipant(participant.id, participant.name)}
-                        className="w-6 h-6 bg-red-600 hover:bg-red-700 rounded-lg flex items-center justify-center transition-all group shadow-lg hover:shadow-xl"
+                        className="w-6 h-6 rounded-lg flex items-center justify-center transition-all group shadow-lg hover:shadow-xl kick-button"
+                        style={{ backgroundColor: 'var(--error-color, #dc2626)' }}
                         title={`Remove ${participant.name}`}
                       >
-                        <X className="w-3 h-3 text-white group-hover:scale-110 transition-transform" />
+                        <X className="w-3 h-3 group-hover:scale-110 transition-transform" style={{ color: 'var(--text-on-primary-color, #ffffff)' }} />
                       </button>
                     </div>
                   ))
@@ -182,67 +218,88 @@ function QuizSessionDemo({
                       <Trophy className="w-4 h-4 text-gb-navy" />
                     </div>
                     <div>
-                      <h2 className="text-lg font-bold text-white">Live Performance Tracking</h2>
+                      <h2 className="text-lg font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Live Performance Tracking</h2>
                       <p className="text-gb-gold text-xs font-medium flex items-center gap-1">
-                        <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                        <span
+                          className="w-2 h-2 rounded-full animate-pulse"
+                          style={{ backgroundColor: 'var(--success-color, #4ade80)' }}
+                        ></span>
                         Real-time Results
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-xs text-gb-gold/80 uppercase tracking-wide">GB Training</div>
-                    <div className="text-xs text-white font-medium">Analytics Dashboard</div>
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Analytics Dashboard</div>
                   </div>
                 </div>
-                
+
                 {liveResults.length > 0 ? (
                   <div className="flex-1 min-h-0 flex flex-col">
                     <div className="grid grid-cols-3 gap-1 mb-2 flex-shrink-0">
-                      <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
+                      <div className="text-center rounded-lg p-1.5 border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color-10, rgba(255, 255, 255, 0.1))' }}>
                         <div className="text-sm font-bold text-gb-gold">
                           {Math.round(liveResults.reduce((sum, p) => sum + p.percentage, 0) / liveResults.length) || 0}%
                         </div>
-                        <div className="text-white font-medium text-xs">Avg Score</div>
+                        <div className="font-medium text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Avg Score</div>
                       </div>
-                      <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
+                      <div className="text-center rounded-lg p-1.5 border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color-10, rgba(255, 255, 255, 0.1))' }}>
                         <div className="text-sm font-bold text-gb-gold">
                           {liveResults.length > 0 ? Math.max(...liveResults.map(p => p.total)) : 0}/{questionCount}
                         </div>
-                        <div className="text-white font-medium text-xs">Progress</div>
+                        <div className="font-medium text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Progress</div>
                       </div>
-                      <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
+                      <div className="text-center rounded-lg p-1.5 border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color-10, rgba(255, 255, 255, 0.1))' }}>
                         <div className="text-sm font-bold text-gb-gold">
                           {liveResults.length > 0 ? Math.round(liveResults.reduce((sum, p) => sum + p.avgTime, 0) / liveResults.length) : 0}s
                         </div>
-                        <div className="text-white font-medium text-xs">Avg Time</div>
+                        <div className="font-medium text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Avg Time</div>
                       </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
                       {liveResults.map((participant, index) => (
-                        <div key={participant.id} className={`flex items-center justify-between p-2 rounded-lg transition-all border ${
-                          index === 0 ? 'bg-gradient-to-r from-yellow-500/40 to-orange-500/40 border-yellow-400' :
-                          index === 1 ? 'bg-gradient-to-r from-gray-400/40 to-slate-500/40 border-gray-400' :
-                          index === 2 ? 'bg-gradient-to-r from-orange-500/40 to-red-500/40 border-orange-400' :
-                          'bg-gradient-to-r from-indigo-500/30 to-purple-500/30 border-indigo-400/50'
-                        }`}>
+                        <div
+                          key={participant.id}
+                          className="flex items-center justify-between p-2 rounded-lg transition-all border"
+                          style={
+                            index === 0 ? {
+                              background: 'var(--rank-first-gradient, linear-gradient(to right, rgba(234, 179, 8, 0.4), rgba(249, 115, 22, 0.4)))',
+                              borderColor: 'var(--rank-first-border, #facc15)'
+                            } :
+                            index === 1 ? {
+                              background: 'var(--rank-second-gradient, linear-gradient(to right, rgba(156, 163, 175, 0.4), rgba(100, 116, 139, 0.4)))',
+                              borderColor: 'var(--rank-second-border, #9ca3af)'
+                            } :
+                            index === 2 ? {
+                              background: 'var(--rank-third-gradient, linear-gradient(to right, rgba(249, 115, 22, 0.4), rgba(239, 68, 68, 0.4)))',
+                              borderColor: 'var(--rank-third-border, #fb923c)'
+                            } : {
+                              background: 'var(--rank-default-gradient, linear-gradient(to right, rgba(99, 102, 241, 0.3), rgba(168, 85, 247, 0.3)))',
+                              borderColor: 'var(--rank-default-border, rgba(129, 140, 248, 0.5))'
+                            }
+                          }
+                        >
                           <div className="flex items-center gap-2">
-                            <span className={`font-bold text-sm ${
-                              index === 0 ? 'text-yellow-300' :
-                              index === 1 ? 'text-gray-300' :
-                              index === 2 ? 'text-orange-300' :
-                              'text-white'
-                            }`}>
+                            <span
+                              className="font-bold text-sm"
+                              style={{
+                                color: index === 0 ? 'var(--rank-first-text, #fde047)' :
+                                       index === 1 ? 'var(--rank-second-text, #d1d5db)' :
+                                       index === 2 ? 'var(--rank-third-text, #fdba74)' :
+                                       'var(--rank-default-text, #ffffff)'
+                              }}
+                            >
                               {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
                             </span>
-                            <span className="font-bold text-white text-xs">{participant.name}</span>
+                            <span className="font-bold text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{participant.name}</span>
                           </div>
                           <div className="flex items-center gap-2 text-xs">
-                            <span className="text-green-300 font-bold">🎯 {participant.score}</span>
-                            <span className="text-blue-300 font-semibold">📊 {participant.percentage}%</span>
-                            <span className="text-purple-300 font-semibold">⚡ {participant.avgTime}s</span>
+                            <span style={{ color: 'var(--stat-score-color, #86efac)' }} className="font-bold">🎯 {participant.score}</span>
+                            <span style={{ color: 'var(--stat-percent-color, #93c5fd)' }} className="font-semibold">📊 {participant.percentage}%</span>
+                            <span style={{ color: 'var(--stat-time-color, #d8b4fe)' }} className="font-semibold">⚡ {participant.avgTime}s</span>
                             {participant.correct === participant.total && participant.total > 0 && (
-                              <span className="text-yellow-300 font-bold text-xs">🌟</span>
+                              <span style={{ color: 'var(--stat-perfect-color, #fde047)' }} className="font-bold text-xs">🌟</span>
                             )}
                           </div>
                         </div>
@@ -250,10 +307,13 @@ function QuizSessionDemo({
                     </div>
                   </div>
                 ) : (
-                  <div className="text-center py-4 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-xl h-full flex flex-col items-center justify-center">
+                  <div
+                    className="text-center py-4 rounded-xl h-full flex flex-col items-center justify-center"
+                    style={{ background: 'var(--empty-state-gradient, linear-gradient(to right, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2)))' }}
+                  >
                     <div className="text-3xl mb-2">🎪</div>
-                    <p className="text-white text-base font-bold mb-1">🎯 Arena is heating up!</p>
-                    <p className="text-yellow-200 text-xs">Live results will appear as contestants answer!</p>
+                    <p className="text-base font-bold mb-1" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>🎯 Arena is heating up!</p>
+                    <p style={{ color: 'var(--highlight-text-color, #fef08a)' }} className="text-xs">Live results will appear as contestants answer!</p>
                   </div>
                 )}
               </div>
@@ -267,28 +327,28 @@ function QuizSessionDemo({
                   <Target className="w-4 h-4 text-gb-navy" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-white">Session Access</h2>
+                  <h2 className="text-base font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Session Access</h2>
                   <p className="text-gb-gold text-xs font-medium">Participant Entry Portal</p>
                 </div>
               </div>
-              
+
               <div className="text-center relative">
-                <div className="bg-white p-3 rounded-xl border-2 border-gb-gold mb-2 inline-block shadow-2xl">
-                  <QRCode 
-                    value={sessionUrl} 
+                <div className="p-3 rounded-xl border-2 border-gb-gold mb-2 inline-block shadow-2xl" style={{ backgroundColor: 'var(--surface-color, #ffffff)' }}>
+                  <QRCode
+                    value={sessionUrl}
                     size={100}
                     level="M"
                   />
                 </div>
-                
+
                 <div className="bg-gb-gold/10 rounded-lg p-2 border border-gb-gold/30 mb-2">
                   <div className="text-gb-gold text-xs font-bold uppercase tracking-wide mb-1">Session URL</div>
-                  <p className="text-white text-xs font-mono break-all">{sessionUrl}</p>
+                  <p className="text-xs font-mono break-all" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{sessionUrl}</p>
                 </div>
-                
+
                 <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
                   <div className="text-xs text-gb-gold/80 uppercase tracking-wide mb-1">Gustav Barkhuysen Attorneys</div>
-                  <div className="text-xs text-white font-medium">Professional Training Portal</div>
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Professional Training Portal</div>
                 </div>
               </div>
             </div>
@@ -299,37 +359,50 @@ function QuizSessionDemo({
                   <Clock className="w-4 h-4 text-gb-navy" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-white">Session Details</h2>
+                  <h2 className="text-base font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Session Details</h2>
                   <p className="text-gb-gold text-xs font-medium">Quiz Configuration</p>
                 </div>
               </div>
-              
+
               <div className="space-y-2 flex-1 overflow-y-auto">
                 <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-medium text-xs">Duration</span>
+                    <span className="font-medium text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Duration</span>
                     <span className="text-gb-gold font-bold text-sm">{Math.floor(timeLimit / 60)} min</span>
                   </div>
                 </div>
-                
+
                 <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-medium text-xs">Status</span>
-                    <span className={`font-bold text-xs uppercase px-2 py-1 rounded-full ${
-                      status === 'waiting' ? 'text-yellow-800 bg-yellow-300' :
-                      status === 'active' ? 'text-green-800 bg-green-300 animate-pulse' :
-                      'text-purple-800 bg-purple-300'
-                    }`}>
+                    <span className="font-medium text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Status</span>
+                    <span
+                      className={`font-bold text-xs uppercase px-2 py-1 rounded-full ${
+                        status === 'active' ? 'animate-pulse' : ''
+                      }`}
+                      style={
+                        status === 'waiting' ? {
+                          backgroundColor: 'var(--warning-color, #fbbf24)',
+                          color: 'var(--warning-text-color, #854d0e)'
+                        } :
+                        status === 'active' ? {
+                          backgroundColor: 'var(--success-light-color, #bbf7d0)',
+                          color: 'var(--success-dark-color, #166534)'
+                        } : {
+                          backgroundColor: 'var(--accent-light-color, #e9d5ff)',
+                          color: 'var(--accent-dark-color, #6b21a8)'
+                        }
+                      }
+                    >
                       {status === 'waiting' && 'Preparing'}
                       {status === 'active' && 'Active'}
                       {status === 'completed' && 'Complete'}
                     </span>
                   </div>
                 </div>
-                
+
                 <div className="bg-gb-gold/10 rounded-lg p-2 border-2 border-gb-gold/30">
                   <div className="flex justify-between items-center">
-                    <span className="text-white font-bold text-xs">Questions</span>
+                    <span className="font-bold text-xs" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Questions</span>
                     <span className="text-gb-gold font-bold text-lg">{questionCount}</span>
                   </div>
                   <div className="text-xs text-gb-gold/80 mt-1">Training Assessment Points</div>

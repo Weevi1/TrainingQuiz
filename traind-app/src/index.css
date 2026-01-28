@@ -1,0 +1,472 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ===== CORE THEME COLORS ===== */
+  --primary-color: #3b82f6;
+  --primary-light-color: #60a5fa;
+  --primary-dark-color: #1e40af;
+  --secondary-color: #1e40af;
+  --secondary-light-color: #3b82f6;
+  --secondary-dark-color: #1e3a8a;
+  --accent-color: #f59e0b;
+
+  /* ===== BACKGROUND COLORS ===== */
+  --background-color: #ffffff;
+  --surface-color: #f8fafc;
+  --surface-hover-color: #f1f5f9;
+
+  /* ===== TEXT COLORS ===== */
+  --text-color: #1f2937;
+  --text-secondary-color: #6b7280;
+  --text-on-primary-color: #ffffff;
+  --text-on-secondary-color: #ffffff;
+
+  /* ===== FEEDBACK COLORS ===== */
+  --success-color: #10b981;
+  --success-light-color: #d1fae5;
+  --error-color: #ef4444;
+  --error-light-color: #fee2e2;
+  --warning-color: #f59e0b;
+  --warning-light-color: #fef3c7;
+
+  /* ===== GAME COLORS ===== */
+  --game-accent-color: #f59e0b;
+  --streak-color: #f97316;
+  --celebration-color: #8b5cf6;
+
+  /* ===== BORDER ===== */
+  --border-color: #e5e7eb;
+
+  /* ===== ADDITIONAL THEME COLORS ===== */
+  --text-muted-color: #6b7280;
+  --info-color: #3b82f6;
+  --gold-color: #fbbf24;
+  --silver-color: #9ca3af;
+  --bronze-color: #d97706;
+
+  /* ===== LAYOUT ===== */
+  --border-radius: 0.5rem;
+  --shadow-style: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+
+  /* ===== TYPOGRAPHY ===== */
+  --font-family: 'Inter', system-ui, sans-serif;
+  --font-family-heading: 'Inter', system-ui, sans-serif;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  /* ===== GAME THEME DEFAULTS ===== */
+  /* Millionaire Game */
+  --millionaire-container-gradient: linear-gradient(to bottom, #1e3a8a, #0f172a);
+  --millionaire-money-ladder-bg: #1e293b;
+  --millionaire-question-bg: linear-gradient(to right, #1e40af, #3b82f6);
+  --millionaire-lifeline-bg: #1e293b;
+  --millionaire-accent: #fbbf24;
+
+  /* Bingo Game */
+  --bingo-container-gradient: linear-gradient(to bottom, #3b82f6, #1e40af);
+  --bingo-card-bg: rgba(255, 255, 255, 0.1);
+  --bingo-marked-cell: #10b981;
+  --bingo-win-highlight: #fbbf24;
+
+  /* Speed Round Game */
+  --speedround-container-gradient: linear-gradient(to bottom, #3b82f6, #1e40af);
+  --speedround-timer-bg: rgba(0, 0, 0, 0.3);
+  --speedround-question-bg: rgba(255, 255, 255, 0.95);
+  --speedround-urgent: #ef4444;
+
+  /* Spot Difference Game */
+  --spotdiff-container-bg: #f8fafc;
+  --spotdiff-document-bg: #ffffff;
+  --spotdiff-highlight: #fef08a;
+  --spotdiff-found: #bbf7d0;
+
+  /* App-specific variables */
+  font-family: var(--font-family);
+  line-height: 1.5;
+  font-weight: var(--font-weight-normal);
+  color: var(--text-color);
+  background-color: var(--background-color);
+
+  /* Rendering optimizations */
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Dark theme override - only applies when no organization theme is set */
+@media (prefers-color-scheme: dark) {
+  :root:not(.themed) {
+    --background-color: #0f172a;
+    --surface-color: #1e293b;
+    --surface-hover-color: #334155;
+    --text-color: #f1f5f9;
+    --text-secondary-color: #94a3b8;
+    --border-color: #334155;
+    --success-light-color: #166534;
+    --error-light-color: #991b1b;
+    --warning-light-color: #92400e;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  .btn-primary {
+    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    background-color: var(--primary-color);
+    color: var(--text-on-primary-color);
+    border-radius: var(--border-radius);
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    background-color: var(--secondary-color);
+    color: var(--text-on-secondary-color);
+    border-radius: var(--border-radius);
+  }
+
+  .btn-success {
+    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    background-color: var(--success-color);
+    color: #ffffff;
+    border-radius: var(--border-radius);
+  }
+
+  .btn-error {
+    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    background-color: var(--error-color);
+    color: #ffffff;
+    border-radius: var(--border-radius);
+  }
+
+  .card {
+    @apply p-6 shadow-sm;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+  }
+
+  .input {
+    @apply w-full px-3 py-2 outline-none;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background-color: var(--background-color);
+    color: var(--text-color);
+  }
+
+  .input:focus {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-color: transparent;
+  }
+
+  /* Feedback classes for quiz results */
+  .feedback-correct {
+    background-color: var(--success-light-color);
+    border-color: var(--success-color);
+    color: var(--success-color);
+  }
+
+  .feedback-incorrect {
+    background-color: var(--error-light-color);
+    border-color: var(--error-color);
+    color: var(--error-color);
+  }
+
+  .feedback-warning {
+    background-color: var(--warning-light-color);
+    border-color: var(--warning-color);
+    color: var(--warning-color);
+  }
+
+  /* Game module themed containers */
+  .game-container {
+    background: var(--millionaire-container-gradient);
+    min-height: 100vh;
+  }
+
+  .game-container-bingo {
+    background: var(--bingo-container-gradient);
+  }
+
+  .game-container-speed {
+    background: var(--speedround-container-gradient);
+  }
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--background-color);
+  color: var(--text-color);
+}
+
+/* ===== ENHANCED GAME ANIMATIONS ===== */
+
+/* Correct answer glow - uses theme success color */
+@keyframes correct-glow {
+  0% {
+    box-shadow: 0 0 5px var(--success-color);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 20px var(--success-color), 0 0 40px var(--success-color);
+    transform: scale(1.05);
+  }
+  100% {
+    box-shadow: 0 0 5px var(--success-color);
+    transform: scale(1);
+  }
+}
+
+/* Wrong answer shake - uses theme error color */
+@keyframes wrong-shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-8px); }
+  20%, 40%, 60%, 80% { transform: translateX(8px); }
+}
+
+/* Streak fire effect - uses theme streak color */
+@keyframes streak-fire {
+  0% {
+    box-shadow: 0 0 10px var(--streak-color);
+    filter: hue-rotate(0deg);
+  }
+  25% {
+    box-shadow: 0 0 20px var(--streak-color);
+    filter: hue-rotate(10deg);
+  }
+  50% {
+    box-shadow: 0 0 30px var(--game-accent-color);
+    filter: hue-rotate(20deg);
+  }
+  75% {
+    box-shadow: 0 0 25px var(--streak-color);
+    filter: hue-rotate(10deg);
+  }
+  100% {
+    box-shadow: 0 0 15px var(--streak-color);
+    filter: hue-rotate(0deg);
+  }
+}
+
+/* Timer pulse - uses theme error color */
+@keyframes timer-pulse {
+  0% {
+    background-color: var(--error-light-color);
+    border-color: var(--error-color);
+    opacity: 0.5;
+  }
+  50% {
+    background-color: var(--error-light-color);
+    border-color: var(--error-color);
+    opacity: 1;
+  }
+  100% {
+    background-color: var(--error-light-color);
+    border-color: var(--error-color);
+    opacity: 0.5;
+  }
+}
+
+/* Celebration bounce - uses theme celebration color */
+@keyframes celebration-bounce {
+  0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-20px); }
+  60% { transform: translateY(-10px); }
+}
+
+/* Achievement burst */
+@keyframes achievement-burst {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Glow effect for correct answers */
+@keyframes glow-effect {
+  0%, 100% {
+    box-shadow: 0 0 10px var(--success-color);
+  }
+  50% {
+    box-shadow: 0 0 25px var(--success-color), 0 0 50px var(--success-color);
+  }
+}
+
+/* Answer highlight pulse */
+@keyframes answer-highlight {
+  0%, 100% {
+    background-color: var(--game-accent-color);
+    opacity: 0.3;
+  }
+  50% {
+    background-color: var(--game-accent-color);
+    opacity: 0.6;
+  }
+}
+
+/* Animation utility classes */
+.enhance-correct { animation: correct-glow 0.6s ease-out; }
+.enhance-wrong { animation: wrong-shake 0.5s ease-out; }
+.enhance-streak { animation: streak-fire 0.8s ease-in-out; }
+.enhance-timer-warning { animation: timer-pulse 0.3s ease-in-out infinite; }
+.enhance-celebration { animation: celebration-bounce 1s ease-in-out; }
+.enhance-achievement { animation: achievement-burst 0.5s ease-out; }
+.enhance-glow { animation: glow-effect 1s ease-in-out infinite; }
+.enhance-highlight { animation: answer-highlight 0.5s ease-in-out infinite; }
+
+/* Gold sparkle animation - for ESI theme and gold accents */
+@keyframes gold-sparkle {
+  0%, 100% {
+    box-shadow: 0 0 5px var(--gold-color);
+    opacity: 0.5;
+  }
+  50% {
+    box-shadow: 0 0 20px var(--gold-color), 0 0 40px var(--gold-color);
+    opacity: 1;
+  }
+}
+.enhance-gold-sparkle { animation: gold-sparkle 1.5s ease-in-out infinite; }
+
+/* Score counter */
+.score-counter {
+  transition: all 0.3s ease-out;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-counter.updating {
+  transform: scale(1.1);
+  color: var(--success-color);
+  font-weight: bold;
+}
+
+/* Floating reaction animations */
+@keyframes float-up {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-200px) scale(1.2);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-400px) scale(0.5);
+    opacity: 0;
+  }
+}
+
+/* ===== MOBILE TOUCH FEEDBACK ===== */
+@media (hover: none) and (pointer: coarse) {
+  .touch-feedback:active {
+    transform: scale(0.95);
+    transition: transform 0.1s ease;
+  }
+
+  .touch-feedback {
+    -webkit-tap-highlight-color: var(--primary-light-color);
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+/* ===== GAME-SPECIFIC THEMED STYLES ===== */
+
+/* Millionaire game themed elements */
+.millionaire-question-area {
+  background: var(--millionaire-question-bg);
+}
+
+.millionaire-money-ladder {
+  background-color: var(--millionaire-money-ladder-bg);
+}
+
+.millionaire-lifeline {
+  background-color: var(--millionaire-lifeline-bg);
+}
+
+/* Bingo game themed elements */
+.bingo-card {
+  background: var(--bingo-card-bg);
+}
+
+.bingo-cell-marked {
+  background-color: var(--bingo-marked-cell);
+}
+
+.bingo-win {
+  background-color: var(--bingo-win-highlight);
+}
+
+/* Speed round themed elements */
+.speed-timer {
+  background: var(--speedround-timer-bg);
+}
+
+.speed-question {
+  background: var(--speedround-question-bg);
+}
+
+.speed-urgent {
+  color: var(--speedround-urgent);
+}
+
+/* Spot difference themed elements */
+.spotdiff-document {
+  background-color: var(--spotdiff-document-bg);
+}
+
+.spotdiff-highlight {
+  background-color: var(--spotdiff-highlight);
+}
+
+.spotdiff-found {
+  background-color: var(--spotdiff-found);
+}
+
+/* ===== ANSWER OPTION STATES ===== */
+
+/* Correct answer state */
+.answer-correct {
+  border-color: var(--success-color) !important;
+  background-color: var(--success-light-color) !important;
+  box-shadow: 0 0 10px var(--success-color);
+}
+
+/* Wrong answer state */
+.answer-wrong {
+  border-color: var(--error-color) !important;
+  background-color: var(--error-light-color) !important;
+  box-shadow: 0 0 10px var(--error-color);
+}
+
+/* Selected answer state */
+.answer-selected {
+  border-color: var(--game-accent-color) !important;
+  background-color: color-mix(in srgb, var(--game-accent-color) 20%, transparent) !important;
+}
+
+/* Hover state for answers */
+.answer-option:not(:disabled):hover {
+  border-color: var(--game-accent-color);
+  transform: scale(1.02);
+}
+
+/* Disabled answer state */
+.answer-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

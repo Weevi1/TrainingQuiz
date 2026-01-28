@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Calendar, Users, TrendingUp, AlertCircle, CheckCircle, XCircle, Clock, ChevronDown, ChevronUp } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { db } from '../lib/firebase'
+import { doc, getDoc, collection, getDocs, query, where, orderBy } from 'firebase/firestore'
 
 function AdminSessionDetails() {
   const { sessionId } = useParams()
@@ -16,69 +17,52 @@ function AdminSessionDetails() {
 
   const loadSessionDetails = async () => {
     try {
-      // Get session with quiz data
-      const { data: session, error: sessionError } = await supabase
-        .from('quiz_sessions')
-        .select(`
-          *,
-          quizzes (
-            id,
-            title,
-            description,
-            questions (
-              id,
-              question_text,
-              options,
-              correct_answer,
-              points,
-              order_index
-            )
-          )
-        `)
-        .eq('id', sessionId)
-        .single()
+      console.log('📊 Loading admin session details for:', sessionId)
 
-      if (sessionError) throw sessionError
+      // Get session data from Firebase
+      const sessionDoc = await getDoc(doc(db, 'sessions', sessionId))
+      if (!sessionDoc.exists()) {
+        throw new Error('Session not found')
+      }
+      const sessionData = { id: sessionDoc.id, ...sessionDoc.data() }
+
+      // Get quiz data
+      let quizData = null
+      let questions = []
+      if (sessionData.quizId) {
+        const quizDoc = await getDoc(doc(db, 'quizzes', sessionData.quizId))
+        if (quizDoc.exists()) {
+          quizData = quizDoc.data()
+          questions = quizData.questions || []
+        }
+      }
 
       // Get all participants
-      const { data: participants, error: participantsError } = await supabase
-        .from('participants')
-        .select('*')
-        .eq('session_id', sessionId)
+      const participantsSnapshot = await getDocs(
+        collection(db, 'sessions', sessionId, 'participants')
+      )
+      const participants = participantsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
 
-      if (participantsError) throw participantsError
-
-      // Get all answers with participant and question details
-      const { data: answers, error: answersError } = await supabase
-        .from('participant_answers')
-        .select(`
-          *,
-          participants!inner (
-            id,
-            name,
-            session_id
-          ),
-          questions!inner (
-            id,
-            question_text,
-            options,
-            correct_answer,
-            points,
-            order_index
-          )
-        `)
-        .eq('participants.session_id', sessionId)
-
-      if (answersError) throw answersError
+      // Get all answers
+      const answersSnapshot = await getDocs(
+        collection(db, 'sessions', sessionId, 'answers')
+      )
+      const answers = answersSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
 
       // Organize data by participant
       const participantData = {}
-      
+
       participants.forEach(participant => {
         participantData[participant.id] = {
           ...participant,
           answers: [],
-          totalQuestions: session.quizzes.questions?.length || 0,
+          totalQuestions: questions.length || 0,
           correctAnswers: 0,
           totalTime: 0,
           score: 0
@@ -87,30 +71,49 @@ function AdminSessionDetails() {
 
       // Add answers to participants - deduplicate by keeping only the most recent answer per participant per question
       const uniqueAnswers = new Map()
-      
+
       answers.forEach(answer => {
-        const key = `${answer.participants.id}-${answer.question_id}`
+        const participantId = answer.participantId
+        const questionId = answer.questionId || answer.question_id
+        const key = `${participantId}-${questionId}`
         const existing = uniqueAnswers.get(key)
-        
-        // Keep the most recent answer (latest answered_at timestamp)
-        if (!existing || new Date(answer.answered_at) > new Date(existing.answered_at)) {
+
+        // Keep the most recent answer (latest answeredAt timestamp)
+        const answerTime = answer.answeredAt?.toDate?.() || new Date(answer.answeredAt || 0)
+        const existingTime = existing ? (existing.answeredAt?.toDate?.() || new Date(existing.answeredAt || 0)) : null
+
+        if (!existing || answerTime > existingTime) {
           uniqueAnswers.set(key, answer)
         }
       })
-      
-      // Process only unique answers
+
+      // Process only unique answers and match with questions
       Array.from(uniqueAnswers.values()).forEach(answer => {
-        const participantId = answer.participants.id
+        const participantId = answer.participantId
+        const questionId = answer.questionId || answer.question_id
+
         if (participantData[participantId]) {
+          // Find the matching question
+          const question = questions.find(q => q.id === questionId)
+
           participantData[participantId].answers.push({
             ...answer,
-            question: answer.questions
+            question_id: questionId,
+            question: question || {
+              id: questionId,
+              questionText: answer.questionText || 'Question text not found',
+              correctAnswer: answer.correctAnswer || '',
+              options: answer.options || []
+            },
+            is_correct: answer.isCorrect,
+            time_taken: answer.timeTaken || 0,
+            answer: answer.selectedAnswer || answer.answer
           })
-          
-          if (answer.is_correct) {
+
+          if (answer.isCorrect) {
             participantData[participantId].correctAnswers++
           }
-          participantData[participantId].totalTime += answer.time_taken || 0
+          participantData[participantId].totalTime += answer.timeTaken || 0
         }
       })
 
@@ -133,9 +136,17 @@ function AdminSessionDetails() {
       })
 
       setSessionData({
-        session,
+        session: {
+          ...sessionData,
+          quizzes: {
+            id: sessionData.quizId,
+            title: quizData?.title || sessionData.quizTitle || 'Unknown Quiz',
+            description: quizData?.description || '',
+            questions: questions
+          }
+        },
         participants: sortedParticipants,
-        questions: session.quizzes.questions?.sort((a, b) => a.order_index - b.order_index) || []
+        questions: questions.sort((a, b) => (a.order_index || a.id) - (b.order_index || b.id))
       })
     } catch (error) {
       console.error('Error loading session details:', error)
@@ -145,7 +156,19 @@ function AdminSessionDetails() {
   }
 
   const formatDate = (dateString) => {
-    const date = new Date(dateString)
+    let date
+    if (dateString?.toDate) {
+      date = dateString.toDate()
+    } else if (typeof dateString === 'string') {
+      date = new Date(dateString)
+    } else {
+      date = dateString
+    }
+
+    if (!date || isNaN(date.getTime())) {
+      return 'Date not available'
+    }
+
     return date.toLocaleDateString('en-GB', {
       weekday: 'long',
       year: 'numeric',
@@ -189,7 +212,7 @@ function AdminSessionDetails() {
     return (
       <div className="min-h-screen bg-gb-navy flex items-center justify-center">
         <div className="text-center">
-          <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+          <AlertCircle className="w-16 h-16 mx-auto mb-4" style={{ color: 'var(--error-color, #f87171)' }} />
           <h2 className="text-xl font-semibold text-gb-gold mb-2">Session Not Found</h2>
           <p className="text-gb-gold/80">The requested session could not be loaded.</p>
           <button
@@ -229,7 +252,7 @@ function AdminSessionDetails() {
       
       <main className="container mx-auto px-4 py-8">
         {/* Session Overview */}
-        <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20 p-6 mb-8">
+        <div className="rounded-lg shadow border border-gb-gold/20 p-6 mb-8" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
           <h2 className="text-2xl font-semibold text-gb-navy font-serif mb-6">Training Session Overview</h2>
           
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
@@ -237,7 +260,7 @@ function AdminSessionDetails() {
               <Calendar className="w-8 h-8 text-gb-gold mx-auto mb-2" />
               <div className="text-sm text-gb-navy/70">Session Date</div>
               <div className="font-semibold text-gb-navy">
-                {formatDate(sessionData.session.ended_at || sessionData.session.created_at)}
+                {formatDate(sessionData.session.completedAt || sessionData.session.createdAt || sessionData.session.created_at)}
               </div>
             </div>
             
@@ -273,7 +296,7 @@ function AdminSessionDetails() {
         </div>
 
         {/* Participant Performance Details */}
-        <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20 p-6">
+        <div className="rounded-lg shadow border border-gb-gold/20 p-6" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
           <h2 className="text-2xl font-semibold text-gb-navy font-serif mb-6">Participant Performance Analysis</h2>
           
           <div className="space-y-6">
@@ -295,18 +318,21 @@ function AdminSessionDetails() {
                           {participant.name}
                         </h3>
                         <div className="text-gb-navy/70 mt-1">
-                          Joined: {formatDate(participant.joined_at)}
+                          Joined: {formatDate(participant.joinedAt || participant.joined_at)}
                         </div>
                       </div>
                     </div>
                     
                     <div className="flex items-center gap-4">
                       <div className="text-right">
-                        <div className={`text-3xl font-bold ${
-                          participant.score >= 80 ? 'text-green-600' :
-                          participant.score >= 60 ? 'text-yellow-600' :
-                          'text-red-600'
-                        }`}>
+                        <div
+                          className="text-3xl font-bold"
+                          style={{
+                            color: participant.score >= 80 ? 'var(--success-color)' :
+                                   participant.score >= 60 ? 'var(--warning-color)' :
+                                   'var(--error-color)'
+                          }}
+                        >
                           {participant.score}%
                         </div>
                         <div className="text-sm text-gb-navy/70">
@@ -339,34 +365,40 @@ function AdminSessionDetails() {
                       const answer = getAnswerForQuestion(participant, question.id)
                       
                       return (
-                        <div key={question.id} className={`p-4 rounded-lg border-2 ${
-                          answer?.is_correct ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'
-                        }`}>
+                        <div
+                          key={question.id}
+                          className="p-4 rounded-lg border-2"
+                          style={{
+                            borderColor: answer?.is_correct ? 'var(--success-border-color)' : 'var(--error-border-color)',
+                            backgroundColor: answer?.is_correct ? 'var(--success-light-color)' : 'var(--error-light-color)'
+                          }}
+                        >
                           <div className="flex items-start gap-3">
                             <div className="flex-shrink-0">
                               {answer?.is_correct ? (
-                                <CheckCircle className="w-5 h-5 text-green-600" />
+                                <CheckCircle className="w-5 h-5" style={{ color: 'var(--success-color)' }} />
                               ) : (
-                                <XCircle className="w-5 h-5 text-red-600" />
+                                <XCircle className="w-5 h-5" style={{ color: 'var(--error-color)' }} />
                               )}
                             </div>
                             
                             <div className="flex-1">
                               <div className="font-medium text-gb-navy mb-2">
-                                Q{qIndex + 1}: {question.question_text}
+                                Q{qIndex + 1}: {question.questionText || question.question_text}
                               </div>
                               
                               <div className="grid md:grid-cols-2 gap-4 text-sm">
                                 <div>
-                                  <div className="text-green-600 font-medium">✓ Correct Answer:</div>
-                                  <div className="text-gb-navy/80">{question.correct_answer}</div>
+                                  <div className="font-medium" style={{ color: 'var(--success-color)' }}>✓ Correct Answer:</div>
+                                  <div className="text-gb-navy/80">{question.correctAnswer || question.correct_answer}</div>
                                 </div>
-                                
+
                                 {answer && (
                                   <div>
-                                    <div className={`font-medium ${
-                                      answer.is_correct ? 'text-green-600' : 'text-red-600'
-                                    }`}>
+                                    <div
+                                      className="font-medium"
+                                      style={{ color: answer.is_correct ? 'var(--success-color)' : 'var(--error-color)' }}
+                                    >
                                       {answer.is_correct ? '✓' : '✗'} {participant.name}'s Answer:
                                     </div>
                                     <div className="text-gb-navy/80">{answer.answer}</div>
@@ -387,16 +419,19 @@ function AdminSessionDetails() {
 
                   {/* Areas for Improvement */}
                   {wrongAnswers.length > 0 && (
-                    <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                      <h4 className="font-semibold text-red-800 mb-2 flex items-center gap-2">
+                    <div
+                      className="mt-4 p-4 rounded-lg border"
+                      style={{ backgroundColor: 'var(--error-light-color)', borderColor: 'var(--error-border-color)' }}
+                    >
+                      <h4 className="font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--error-text-color)' }}>
                         <AlertCircle className="w-4 h-4" />
                         Areas Requiring Follow-up Training ({wrongAnswers.length} questions)
                       </h4>
-                      <ul className="text-red-700 text-sm space-y-1">
+                      <ul className="text-sm space-y-1" style={{ color: 'var(--error-color)' }}>
                         {wrongAnswers.map((wrong, idx) => (
                           <li key={idx} className="flex items-start gap-2">
-                            <span className="text-red-500 font-bold">•</span>
-                            <span>{wrong.question.question_text}</span>
+                            <span className="font-bold" style={{ color: 'var(--error-color)' }}>•</span>
+                            <span>{wrong.question.questionText || wrong.question.question_text}</span>
                           </li>
                         ))}
                       </ul>
@@ -404,8 +439,11 @@ function AdminSessionDetails() {
                   )}
                   
                   {wrongAnswers.length === 0 && (
-                    <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-                      <h4 className="font-semibold text-green-800 flex items-center gap-2">
+                    <div
+                      className="mt-4 p-4 rounded-lg border"
+                      style={{ backgroundColor: 'var(--success-light-color)', borderColor: 'var(--success-border-color)' }}
+                    >
+                      <h4 className="font-semibold flex items-center gap-2" style={{ color: 'var(--success-text-color)' }}>
                         <CheckCircle className="w-4 h-4" />
                         Perfect Score! No follow-up training required.
                       </h4>

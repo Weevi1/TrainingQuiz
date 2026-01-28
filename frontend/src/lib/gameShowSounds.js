@@ -5,6 +5,15 @@ class GameShowSounds {
   constructor() {
     this.audioContext = null
     this.initialized = false
+
+    // Normalized volume levels for consistent UX
+    this.volumes = {
+      feedback: 0.25,      // Correct/Wrong answers - moderate volume
+      selection: 0.15,     // UI interactions - subtle
+      celebration: 0.3,    // Victory/celebrations - slightly louder
+      timer: 0.2,          // Clock ticking - background level
+      fanfare: 0.35,       // Show start/complete - prominent but not overwhelming
+    }
   }
 
   // Initialize audio context (must be called after user interaction)
@@ -20,73 +29,116 @@ class GameShowSounds {
     }
   }
 
-  // 🔊 CORRECT ANSWER - Triumphant Ding!
-  playCorrect() {
-    if (!this.initialized) return
-    
+  // Helper method to create enhanced oscillators with proper envelopes
+  createOscillator(frequency, type = 'sine', volume = 0.2, duration = 0.5) {
+    if (!this.initialized) return null
+
     const oscillator = this.audioContext.createOscillator()
     const gainNode = this.audioContext.createGain()
-    
+
     oscillator.connect(gainNode)
     gainNode.connect(this.audioContext.destination)
-    
-    // Beautiful ascending ding sound
-    oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime)
-    oscillator.frequency.exponentialRampToValueAtTime(1200, this.audioContext.currentTime + 0.1)
-    oscillator.frequency.exponentialRampToValueAtTime(1000, this.audioContext.currentTime + 0.3)
-    
-    gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.5)
-    
-    oscillator.type = 'sine'
-    oscillator.start()
-    oscillator.stop(this.audioContext.currentTime + 0.5)
+
+    oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime)
+    oscillator.type = type
+
+    // Enhanced envelope: attack -> sustain -> release
+    gainNode.gain.setValueAtTime(0, this.audioContext.currentTime)
+    gainNode.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.05) // 50ms attack
+    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration)
+
+    return { oscillator, gainNode }
   }
 
-  // ❌ WRONG ANSWER - Classic Game Show Buzzer!
+  // 🔊 CORRECT ANSWER - Enhanced Triumphant Sound!
+  playCorrect() {
+    if (!this.initialized) return
+
+    const baseFreq = 800
+    const volume = this.volumes.feedback
+
+    // Create a rich, layered sound with multiple harmonics
+    const harmonics = [
+      { freq: baseFreq, type: 'sine', vol: volume * 1.0 },        // Fundamental
+      { freq: baseFreq * 1.5, type: 'sine', vol: volume * 0.6 },  // Perfect fifth
+      { freq: baseFreq * 2, type: 'triangle', vol: volume * 0.3 }, // Octave with triangle wave
+    ]
+
+    harmonics.forEach((harmonic, index) => {
+      const osc = this.createOscillator(harmonic.freq, harmonic.type, harmonic.vol, 0.6)
+      if (!osc) return
+
+      // Ascending frequency sweep for that "ding" effect
+      osc.oscillator.frequency.exponentialRampToValueAtTime(
+        harmonic.freq * 1.4,
+        this.audioContext.currentTime + 0.1
+      )
+      osc.oscillator.frequency.exponentialRampToValueAtTime(
+        harmonic.freq * 1.1,
+        this.audioContext.currentTime + 0.4
+      )
+
+      osc.oscillator.start()
+      osc.oscillator.stop(this.audioContext.currentTime + 0.6)
+    })
+  }
+
+  // ❌ WRONG ANSWER - Enhanced Game Show Buzzer!
   playBuzzer() {
     if (!this.initialized) return
-    
-    const oscillator = this.audioContext.createOscillator()
-    const gainNode = this.audioContext.createGain()
-    
-    oscillator.connect(gainNode)
-    gainNode.connect(this.audioContext.destination)
-    
-    // Harsh buzzer sound
-    oscillator.frequency.setValueAtTime(150, this.audioContext.currentTime)
-    oscillator.frequency.linearRampToValueAtTime(100, this.audioContext.currentTime + 0.5)
-    
-    gainNode.gain.setValueAtTime(0.4, this.audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.5)
-    
-    oscillator.type = 'sawtooth'
-    oscillator.start()
-    oscillator.stop(this.audioContext.currentTime + 0.5)
+
+    const volume = this.volumes.feedback
+
+    // Create a more sophisticated "buzzer" with multiple layers
+    const buzzerLayers = [
+      { freq: 150, type: 'sawtooth', vol: volume * 0.8 },    // Main buzzer tone
+      { freq: 100, type: 'square', vol: volume * 0.6 },      // Lower harsh tone
+      { freq: 200, type: 'sawtooth', vol: volume * 0.4 },    // Higher edge
+    ]
+
+    buzzerLayers.forEach((layer, index) => {
+      const osc = this.createOscillator(layer.freq, layer.type, layer.vol, 0.7)
+      if (!osc) return
+
+      // Characteristic buzzer frequency drop
+      osc.oscillator.frequency.linearRampToValueAtTime(
+        layer.freq * 0.7,
+        this.audioContext.currentTime + 0.6
+      )
+
+      // Add some modulation for more "mechanical" buzzer feel
+      const lfo = this.audioContext.createOscillator()
+      const lfoGain = this.audioContext.createGain()
+
+      lfo.frequency.setValueAtTime(8, this.audioContext.currentTime) // 8Hz modulation
+      lfoGain.gain.setValueAtTime(5, this.audioContext.currentTime)  // Small pitch modulation
+
+      lfo.connect(lfoGain)
+      lfoGain.connect(osc.oscillator.frequency)
+
+      osc.oscillator.start()
+      lfo.start()
+
+      osc.oscillator.stop(this.audioContext.currentTime + 0.7)
+      lfo.stop(this.audioContext.currentTime + 0.7)
+    })
   }
 
   // 🎉 CELEBRATION - Victory Fanfare!
   playCelebration() {
     if (!this.initialized) return
-    
-    // Multi-note fanfare
+
+    const volume = this.volumes.celebration
+    // Multi-note fanfare - A major chord arpeggio
     const notes = [440, 554, 659, 880] // A, C#, E, A octave
-    
+
     notes.forEach((freq, index) => {
       setTimeout(() => {
-        const osc = this.audioContext.createOscillator()
-        const gain = this.audioContext.createGain()
-        
-        osc.connect(gain)
-        gain.connect(this.audioContext.destination)
-        
-        osc.frequency.setValueAtTime(freq, this.audioContext.currentTime)
-        gain.gain.setValueAtTime(0.2, this.audioContext.currentTime)
-        gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3)
-        
-        osc.type = 'triangle'
-        osc.start()
-        osc.stop(this.audioContext.currentTime + 0.3)
+        const osc = this.createOscillator(freq, 'triangle', volume, 0.4)
+        if (!osc) return
+
+        osc.oscillator.start()
+        osc.oscillator.stop(this.audioContext.currentTime + 0.4)
       }, index * 100)
     })
   }
@@ -94,110 +146,72 @@ class GameShowSounds {
   // ⏰ DRAMATIC COUNTDOWN - Ticking with tension!
   playTick() {
     if (!this.initialized) return
-    
-    const oscillator = this.audioContext.createOscillator()
-    const gainNode = this.audioContext.createGain()
-    
-    oscillator.connect(gainNode)
-    gainNode.connect(this.audioContext.destination)
-    
-    oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime)
-    gainNode.gain.setValueAtTime(0.1, this.audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1)
-    
-    oscillator.type = 'square'
-    oscillator.start()
-    oscillator.stop(this.audioContext.currentTime + 0.1)
+
+    const osc = this.createOscillator(800, 'square', this.volumes.timer, 0.15)
+    if (!osc) return
+
+    osc.oscillator.start()
+    osc.oscillator.stop(this.audioContext.currentTime + 0.15)
   }
 
   // 🚨 FINAL COUNTDOWN - Dramatic last seconds!
   playFinalCountdown() {
     if (!this.initialized) return
-    
-    const oscillator = this.audioContext.createOscillator()
-    const gainNode = this.audioContext.createGain()
-    
-    oscillator.connect(gainNode)
-    gainNode.connect(this.audioContext.destination)
-    
-    // Higher pitch, more urgent
-    oscillator.frequency.setValueAtTime(1000, this.audioContext.currentTime)
-    oscillator.frequency.linearRampToValueAtTime(1200, this.audioContext.currentTime + 0.05)
-    oscillator.frequency.linearRampToValueAtTime(1000, this.audioContext.currentTime + 0.1)
-    
-    gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.15)
-    
-    oscillator.type = 'sawtooth'
-    oscillator.start()
-    oscillator.stop(this.audioContext.currentTime + 0.15)
+
+    const osc = this.createOscillator(1000, 'sawtooth', this.volumes.timer * 1.5, 0.2)
+    if (!osc) return
+
+    // Higher pitch, more urgent with frequency wobble
+    osc.oscillator.frequency.linearRampToValueAtTime(1200, this.audioContext.currentTime + 0.05)
+    osc.oscillator.frequency.linearRampToValueAtTime(1000, this.audioContext.currentTime + 0.15)
+
+    osc.oscillator.start()
+    osc.oscillator.stop(this.audioContext.currentTime + 0.2)
   }
 
   // 🎪 SHOW START - Opening fanfare!
   playShowStart() {
     if (!this.initialized) return
-    
-    // Grand opening chord progression
-    const chord = [262, 330, 392, 523] // C Major chord
-    
+
+    const volume = this.volumes.fanfare
+    // Grand opening chord progression - C Major chord
+    const chord = [262, 330, 392, 523] // C, E, G, C
+
     chord.forEach((freq, index) => {
-      const osc = this.audioContext.createOscillator()
-      const gain = this.audioContext.createGain()
-      
-      osc.connect(gain)
-      gain.connect(this.audioContext.destination)
-      
-      osc.frequency.setValueAtTime(freq, this.audioContext.currentTime)
-      gain.gain.setValueAtTime(0.15, this.audioContext.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 1.5)
-      
-      osc.type = 'triangle'
-      osc.start()
-      osc.stop(this.audioContext.currentTime + 1.5)
+      const osc = this.createOscillator(freq, 'triangle', volume, 1.8)
+      if (!osc) return
+
+      osc.oscillator.start()
+      osc.oscillator.stop(this.audioContext.currentTime + 1.8)
     })
   }
 
   // 🎯 ANSWER SELECTION - Quick feedback beep
   playSelect() {
     if (!this.initialized) return
-    
-    const oscillator = this.audioContext.createOscillator()
-    const gainNode = this.audioContext.createGain()
-    
-    oscillator.connect(gainNode)
-    gainNode.connect(this.audioContext.destination)
-    
-    oscillator.frequency.setValueAtTime(600, this.audioContext.currentTime)
-    gainNode.gain.setValueAtTime(0.1, this.audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1)
-    
-    oscillator.type = 'sine'
-    oscillator.start()
-    oscillator.stop(this.audioContext.currentTime + 0.1)
+
+    const osc = this.createOscillator(600, 'sine', this.volumes.selection, 0.12)
+    if (!osc) return
+
+    osc.oscillator.start()
+    osc.oscillator.stop(this.audioContext.currentTime + 0.12)
   }
 
   // 🏆 QUIZ COMPLETE - Victory theme!
   playQuizComplete() {
     if (!this.initialized) return
-    
-    // Victory melody
+
+    const volume = this.volumes.fanfare
+    // Victory melody - ascending scale
     const melody = [523, 659, 784, 880, 1047] // C, E, G, A, C
-    
+
     melody.forEach((freq, index) => {
       setTimeout(() => {
-        const osc = this.audioContext.createOscillator()
-        const gain = this.audioContext.createGain()
-        
-        osc.connect(gain)
-        gain.connect(this.audioContext.destination)
-        
-        osc.frequency.setValueAtTime(freq, this.audioContext.currentTime)
-        gain.gain.setValueAtTime(0.2, this.audioContext.currentTime)
-        gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.4)
-        
-        osc.type = 'triangle'
-        osc.start()
-        osc.stop(this.audioContext.currentTime + 0.4)
+        const osc = this.createOscillator(freq, 'triangle', volume, 0.5)
+        if (!osc) return
+
+        osc.oscillator.start()
+        osc.oscillator.stop(this.audioContext.currentTime + 0.5)
       }, index * 150)
     })
   }

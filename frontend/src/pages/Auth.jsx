@@ -59,19 +59,38 @@ function Auth({ mode = 'signin' }) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center px-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-8">
+    <div
+      className="min-h-screen flex items-center justify-center px-4"
+      style={{ background: 'linear-gradient(to bottom right, var(--primary-color), var(--accent-color, #9333ea))' }}
+    >
+      <div
+        className="rounded-lg shadow-xl w-full max-w-md p-8"
+        style={{ backgroundColor: 'var(--surface-color, #ffffff)' }}
+      >
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">
+          <h1
+            className="text-3xl font-bold"
+            style={{ color: 'var(--text-color, #111827)' }}
+          >
             {isSignUp ? 'Create Account' : 'Welcome Back'}
           </h1>
-          <p className="text-gray-600 mt-2">
+          <p
+            className="mt-2"
+            style={{ color: 'var(--text-secondary-color, #4b5563)' }}
+          >
             {isSignUp ? 'Start creating engaging quizzes' : 'Sign in to manage your quizzes'}
           </p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center text-red-700">
+          <div
+            className="mb-4 p-3 border rounded-lg flex items-center"
+            style={{
+              backgroundColor: 'var(--error-bg-color, #fef2f2)',
+              borderColor: 'var(--error-border-color, #fecaca)',
+              color: 'var(--error-color, #b91c1c)'
+            }}
+          >
             <AlertCircle className="w-5 h-5 mr-2" />
             <span className="text-sm">{error}</span>
           </div>
@@ -80,18 +99,25 @@ function Auth({ mode = 'signin' }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           {isSignUp && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label
+                className="block text-sm font-medium mb-1"
+                style={{ color: 'var(--text-secondary-color, #374151)' }}
+              >
                 Full Name
               </label>
               <div className="relative">
-                <User className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <User className="absolute left-3 top-3 w-5 h-5" style={{ color: 'var(--text-muted-color, #9ca3af)' }} />
                 <input
                   type="text"
                   name="name"
                   value={formData.name}
                   onChange={handleChange}
                   required={isSignUp}
-                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full pl-10 pr-3 py-2 border rounded-lg focus:outline-none focus:ring-2"
+                  style={{
+                    borderColor: 'var(--border-color, #d1d5db)',
+                    '--tw-ring-color': 'var(--primary-color, #3b82f6)'
+                  }}
                   placeholder="John Doe"
                 />
               </div>
@@ -99,36 +125,50 @@ function Auth({ mode = 'signin' }) {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              className="block text-sm font-medium mb-1"
+              style={{ color: 'var(--text-secondary-color, #374151)' }}
+            >
               Email Address
             </label>
             <div className="relative">
-              <Mail className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <Mail className="absolute left-3 top-3 w-5 h-5" style={{ color: 'var(--text-muted-color, #9ca3af)' }} />
               <input
                 type="email"
                 name="email"
                 value={formData.email}
                 onChange={handleChange}
                 required
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-10 pr-3 py-2 border rounded-lg focus:outline-none focus:ring-2"
+                style={{
+                  borderColor: 'var(--border-color, #d1d5db)',
+                  '--tw-ring-color': 'var(--primary-color, #3b82f6)'
+                }}
                 placeholder="trainer@example.com"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              className="block text-sm font-medium mb-1"
+              style={{ color: 'var(--text-secondary-color, #374151)' }}
+            >
               Password
             </label>
             <div className="relative">
-              <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <Lock className="absolute left-3 top-3 w-5 h-5" style={{ color: 'var(--text-muted-color, #9ca3af)' }} />
               <input
                 type="password"
                 name="password"
                 value={formData.password}
                 onChange={handleChange}
                 required
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-10 pr-3 py-2 border rounded-lg focus:outline-none focus:ring-2"
+                style={{
+                  borderColor: 'var(--border-color, #d1d5db)',
+                  '--tw-ring-color': 'var(--primary-color, #3b82f6)'
+                }}
                 placeholder="••••••••"
               />
             </div>
@@ -136,18 +176,25 @@ function Auth({ mode = 'signin' }) {
 
           {isSignUp && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label
+                className="block text-sm font-medium mb-1"
+                style={{ color: 'var(--text-secondary-color, #374151)' }}
+              >
                 Confirm Password
               </label>
               <div className="relative">
-                <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <Lock className="absolute left-3 top-3 w-5 h-5" style={{ color: 'var(--text-muted-color, #9ca3af)' }} />
                 <input
                   type="password"
                   name="confirmPassword"
                   value={formData.confirmPassword}
                   onChange={handleChange}
                   required={isSignUp}
-                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full pl-10 pr-3 py-2 border rounded-lg focus:outline-none focus:ring-2"
+                  style={{
+                    borderColor: 'var(--border-color, #d1d5db)',
+                    '--tw-ring-color': 'var(--primary-color, #3b82f6)'
+                  }}
                   placeholder="••••••••"
                 />
               </div>
@@ -157,14 +204,18 @@ function Auth({ mode = 'signin' }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              backgroundColor: 'var(--primary-color, #2563eb)',
+              color: 'var(--primary-text-color, #ffffff)'
+            }}
           >
             {loading ? 'Processing...' : (isSignUp ? 'Create Account' : 'Sign In')}
           </button>
         </form>
 
         <div className="mt-6 text-center">
-          <p className="text-gray-600">
+          <p style={{ color: 'var(--text-secondary-color, #4b5563)' }}>
             {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
             <button
               type="button"
@@ -173,7 +224,8 @@ function Auth({ mode = 'signin' }) {
                 setError('')
                 setFormData({ email: '', password: '', name: '', confirmPassword: '' })
               }}
-              className="text-blue-600 hover:underline font-medium"
+              className="hover:underline font-medium"
+              style={{ color: 'var(--primary-color, #2563eb)' }}
             >
               {isSignUp ? 'Sign In' : 'Sign Up'}
             </button>
@@ -181,7 +233,11 @@ function Auth({ mode = 'signin' }) {
         </div>
 
         <div className="mt-4 text-center">
-          <Link to="/" className="text-gray-500 hover:text-gray-700 text-sm">
+          <Link
+            to="/"
+            className="text-sm hover:opacity-80"
+            style={{ color: 'var(--text-muted-color, #6b7280)' }}
+          >
             Back to Home
           </Link>
         </div>

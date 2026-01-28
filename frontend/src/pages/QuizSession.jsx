@@ -2,7 +2,15 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import QRCode from 'react-qr-code'
 import { Users, Clock, Play, Square, Trophy, Zap, Star, Target, Award, X, ArrowLeft } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import {
+  getSession,
+  subscribeToParticipants,
+  subscribeToSession,
+  subscribeToAnswers,
+  removeParticipant,
+  updateSession
+} from '../lib/firestore'
+import { serverTimestamp, enableNetwork, disableNetwork } from 'firebase/firestore'
 import { gameShowSounds } from '../lib/gameShowSounds'
 
 function QuizSession() {
@@ -12,162 +20,205 @@ function QuizSession() {
   const [participants, setParticipants] = useState([])
   const [liveResults, setLiveResults] = useState([])
   const [loading, setLoading] = useState(true)
+  const [realtimeConnected, setRealtimeConnected] = useState(true)
+  const [lastParticipantUpdate, setLastParticipantUpdate] = useState(new Date())
+  const [qrSize, setQrSize] = useState(400)
+  const [timeRemaining, setTimeRemaining] = useState(null)
+
+  // Update QR code size based on window dimensions
+  useEffect(() => {
+    const updateQrSize = () => {
+      const width = window.innerWidth
+      const height = window.innerHeight
+      // Calculate size based on both width and height, with reasonable limits
+      const maxSize = Math.min(width * 0.35, height * 0.4, 450)
+      const minSize = 180
+      setQrSize(Math.max(minSize, maxSize))
+    }
+
+    updateQrSize()
+    window.addEventListener('resize', updateQrSize)
+    return () => window.removeEventListener('resize', updateQrSize)
+  }, [])
 
   useEffect(() => {
+    if (!sessionId) return
+
+    console.log('🔥 Setting up Firebase real-time subscriptions for session:', sessionId)
+
+    // Load initial session data
     loadSessionData()
-    
-    // Subscribe to real-time participant updates
-    console.log('🔔 Setting up real-time subscriptions for sessionId:', sessionId)
-    const participantSubscription = supabase
-      .channel(`participants-${sessionId}`)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'participants',
-        filter: `session_id=eq.${sessionId}`,
-      }, (payload) => {
-        console.log('🔥 REAL-TIME: Participant change received!', payload)
-        console.log('🔄 Refreshing participants list...')
-        loadParticipants()
-      })
-      .subscribe((status) => {
-        console.log('📡 Participant subscription status:', status)
-      })
 
-    // Subscribe to real-time session status updates
-    const sessionSubscription = supabase
-      .channel(`session-${sessionId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'quiz_sessions',
-        filter: `id=eq.${sessionId}`,
-      }, (payload) => {
-        console.log('🔥 REAL-TIME: Session status changed!', payload)
-        const newSession = payload.new
-        setSession(prev => {
-          if (prev) {
-            console.log(`🔄 Real-time session update: ${prev.status} → ${newSession.status}`)
-            return {
-              ...prev,
-              status: newSession.status,
-              started_at: newSession.started_at || prev.started_at,
-              ended_at: newSession.ended_at || prev.ended_at
-            }
-          }
-          return prev
-        })
-        
-        // Start loading live results if session becomes active
-        if (newSession.status === 'active') {
-          console.log('📊 Session is now active - starting live results...')
-          setTimeout(loadLiveResults, 1000)
-        }
-      })
-      .subscribe((status) => {
-        console.log('📡 Session subscription status:', status)
-      })
+    // Set up real-time subscriptions - NO POLLING NEEDED!
+    const unsubscribeSession = subscribeToSession(sessionId, (sessionData) => {
+      console.log('🔥 REAL-TIME: Session updated!', sessionData)
+      setSession(sessionData)
+      setRealtimeConnected(true)
+    })
 
-    // Also set up a polling backup every 2 seconds for responsive updates
-    const pollingInterval = setInterval(async () => {
-      console.log('⚡ Polling for participant updates...')
-      loadParticipants()
-      
-      // Re-check session status from database to get current state
-      try {
-        const { data: currentSession } = await supabase
-          .from('quiz_sessions')
-          .select('status, started_at, ended_at')
-          .eq('id', sessionId)
-          .single()
-        
-        if (currentSession) {
-          // Update local session state if status changed
-          setSession(prev => {
-            if (prev && prev.status !== currentSession.status) {
-              console.log(`🔄 Session status changed: ${prev.status} → ${currentSession.status}`)
-              return {
-                ...prev,
-                status: currentSession.status,
-                started_at: currentSession.started_at || prev.started_at,
-                ended_at: currentSession.ended_at || prev.ended_at
-              }
-            }
-            return prev
-          })
-          
-          if (currentSession.status === 'active') {
-            console.log('📊 Session is active - loading live results...')
-            loadLiveResults()
-          }
-        }
-      } catch (error) {
-        console.log('Error checking session status:', error)
-      }
-    }, 2000)
+    const unsubscribeParticipants = subscribeToParticipants(sessionId, (participantsData) => {
+      console.log('🔥 REAL-TIME: Participants updated!', participantsData.length, 'participants')
+      setParticipants(participantsData)
+      setLastParticipantUpdate(new Date())
+      setRealtimeConnected(true)
+    })
 
+    const unsubscribeAnswers = subscribeToAnswers(sessionId, (answersData) => {
+      console.log('🔥 REAL-TIME: Answers updated!', answersData.length, 'answers')
+      calculateLiveResults(answersData)
+      setRealtimeConnected(true)
+    })
+
+    // Cleanup function - unsubscribe from all real-time listeners
     return () => {
-      console.log('🧹 Cleaning up subscriptions...')
-      supabase.removeChannel(participantSubscription)
-      supabase.removeChannel(sessionSubscription)
-      clearInterval(pollingInterval)
+      console.log('🧹 Cleaning up Firebase subscriptions...')
+      unsubscribeSession()
+      unsubscribeParticipants()
+      unsubscribeAnswers()
     }
   }, [sessionId])
+
+  // Recalculate live results whenever participants change
+  useEffect(() => {
+    if (participants.length > 0 && session?.quiz) {
+      // Get current answers and recalculate
+      const unsubscribe = subscribeToAnswers(sessionId, (answersData) => {
+        calculateLiveResults(answersData)
+      })
+      return unsubscribe
+    }
+  }, [participants, session?.quiz])
+
+  // Timer management - synchronized with participant screens
+  useEffect(() => {
+    console.log('🔄 Timer effect triggered:', {
+      status: session?.status,
+      hasStartedAt: !!session?.startedAt,
+      hasTimeLimit: !!session?.quiz?.timeLimit,
+      timeLimit: session?.quiz?.timeLimit
+    })
+
+    if (session?.status === 'active' && session?.startedAt && session?.quiz?.timeLimit) {
+      // Projector is the authoritative timer - calculate from its start time
+      const calculateTimeRemaining = () => {
+        // Use timerStartedAt (number) first, fallback to startedAt (Firestore timestamp)
+        const timerStart = session.timerStartedAt ||
+          (session.startedAt ? session.startedAt.toDate().getTime() : Date.now())
+
+        const currentTime = Date.now()
+        const elapsedSeconds = Math.floor((currentTime - timerStart) / 1000)
+        const remaining = Math.max(0, session.quiz.timeLimit - elapsedSeconds)
+
+        return remaining
+      }
+
+      // Update timer display every second (for smooth countdown)
+      const displayTimer = setInterval(async () => {
+        setTimeRemaining(prev => {
+          // Recalculate from authoritative projector time
+          const currentTime = calculateTimeRemaining()
+
+          // Broadcast timer update to sync mobile devices every second for better sync
+          updateSession(sessionId, {
+            currentTimeRemaining: currentTime,
+            lastTimerUpdate: Date.now()
+          }).catch(error => console.error('Timer sync update failed:', error))
+
+          // Debug logging for projector timer
+          if (Math.floor(Date.now() / 1000) % 5 === 0) { // Log every 5 seconds for better debugging
+            const timerStart = session.timerStartedAt || (session.startedAt ? session.startedAt.toDate().getTime() : 0)
+            console.log('🖥️ PROJECTOR (Authority) Timer:')
+            console.log('  - Quiz timeLimit:', session.quiz.timeLimit, 'seconds')
+            console.log('  - Timer started at:', new Date(timerStart).toISOString())
+            console.log('  - Current time:', new Date().toISOString())
+            console.log('  - Elapsed:', Math.floor((Date.now() - timerStart) / 1000), 'seconds')
+            console.log('  - Remaining:', currentTime, 'seconds')
+            console.log('  - Broadcasting:', currentTime, 'to mobile devices')
+          }
+
+          // Auto-end session when timer expires
+          if (currentTime <= 0 && session.status === 'active') {
+            console.log('⏰ Timer expired on projector, ending session')
+            stopSession()
+            return 0
+          }
+
+          return currentTime
+        })
+      }, 1000)
+
+      // Set initial time immediately
+      const initialTime = calculateTimeRemaining()
+      console.log('🚀 TIMER STARTED - Initial calculation:', {
+        timeLimit: session.quiz.timeLimit,
+        startedAt: session.startedAt.toDate().toISOString(),
+        initialRemaining: initialTime
+      })
+      setTimeRemaining(initialTime)
+
+      return () => clearInterval(displayTimer)
+    } else if (session?.status !== 'active') {
+      // Reset timer when not active
+      setTimeRemaining(session?.quiz?.timeLimit || null)
+    }
+  }, [session?.status, session?.startedAt, session?.quiz?.timeLimit])
+
+  const formatTime = (seconds) => {
+    if (seconds === null || seconds === undefined) return '--:--'
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
 
   const loadSessionData = async () => {
     console.log('🔄 LOADING SESSION DATA for sessionId:', sessionId)
     try {
-      // Get session with quiz data
-      const { data: sessionData, error: sessionError } = await supabase
-        .from('quiz_sessions')
-        .select(`
-          *,
-          quizzes (
-            id,
-            title,
-            description,
-            time_limit,
-            questions (*)
-          )
-        `)
-        .eq('id', sessionId)
-        .single()
-
-      if (sessionError) {
-        console.error('❌ SESSION ERROR:', sessionError)
-        throw sessionError
-      }
-
+      // Get session data from Firebase
+      const sessionData = await getSession(sessionId)
       console.log('✅ SESSION LOADED:', sessionData)
+      console.log('📝 QUIZ DATA:', sessionData.quiz)
+      console.log('⏰ TIME LIMIT:', sessionData.quiz?.timeLimit, 'seconds =', Math.floor((sessionData.quiz?.timeLimit || 0) / 60), 'minutes')
       setSession(sessionData)
-      await loadParticipants()
     } catch (error) {
       console.error('💥 Error loading session data:', error)
+      // Session not found - redirect back
+      navigate('/admin')
     } finally {
       setLoading(false)
     }
   }
 
-  const loadParticipants = async () => {
-    console.log('👥 LOADING PARTICIPANTS for sessionId:', sessionId)
-    try {
-      const { data: participantData, error } = await supabase
-        .from('participants')
-        .select('*')
-        .eq('session_id', sessionId)
-        .order('joined_at', { ascending: true })
+  // Calculate live results from answers data
+  const calculateLiveResults = (answersData) => {
+    if (!session?.quiz?.questions || !participants.length) return
 
-      if (error) {
-        console.error('❌ PARTICIPANT ERROR:', error)
-        throw error
+    const participantResults = participants.map(participant => {
+      const participantAnswers = answersData.filter(answer => answer.participantId === participant.id)
+      const totalQuestions = session.quiz.questions.length
+      const correctAnswers = participantAnswers.filter(answer => answer.isCorrect).length
+      const totalAnswers = participantAnswers.length
+      // Check both answers-based completion and participant.completed flag
+      const completed = (totalAnswers >= totalQuestions) || participant.completed || false
+      const score = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0
+      const avgTime = totalAnswers > 0 ? Math.round(participantAnswers.reduce((sum, a) => sum + (a.timeTaken || 0), 0) / totalAnswers) : 0
+
+      return {
+        ...participant,
+        completed,
+        score,
+        totalAnswers,
+        avgTime
       }
+    })
 
-      console.log('📊 PARTICIPANTS FOUND:', participantData?.length || 0)
-      console.log('👤 PARTICIPANT DATA:', participantData)
-      setParticipants(participantData || [])
-    } catch (error) {
-      console.error('💥 Error loading participants:', error)
-    }
+    // Sort by completion first, then by score, then by time
+    participantResults.sort((a, b) => {
+      if (a.completed !== b.completed) return b.completed - a.completed
+      if (a.score !== b.score) return b.score - a.score
+      return a.avgTime - b.avgTime
+    })
+
+    setLiveResults(participantResults)
   }
 
   const kickParticipant = async (participantId, participantName) => {
@@ -176,18 +227,8 @@ function QuizSession() {
     }
 
     try {
-      // Delete the participant from the database
-      const { error } = await supabase
-        .from('participants')
-        .delete()
-        .eq('id', participantId)
-
-      if (error) {
-        console.error('❌ Error kicking participant:', error)
-        alert('Failed to remove participant. Please try again.')
-        return
-      }
-
+      // Delete the participant from Firebase
+      await removeParticipant(sessionId, participantId)
       console.log('✅ Participant kicked successfully:', participantName)
       // The real-time subscription will automatically update the participant list
     } catch (error) {
@@ -196,102 +237,22 @@ function QuizSession() {
     }
   }
 
-  const loadLiveResults = async () => {
-    console.log('📊 LOADING LIVE RESULTS for sessionId:', sessionId)
-    try {
-      // Get all participant answers with participant info
-      const { data: answersData, error } = await supabase
-        .from('participant_answers')
-        .select(`
-          *,
-          participants!inner (
-            id,
-            name,
-            session_id
-          ),
-          questions!inner (
-            id,
-            points
-          )
-        `)
-        .eq('participants.session_id', sessionId)
-
-      if (error) {
-        console.error('❌ LIVE RESULTS ERROR:', error)
-        throw error
-      }
-
-      console.log('📈 RAW ANSWERS DATA:', answersData)
-
-      // Calculate live leaderboard
-      const participantStats = {}
-      
-      answersData?.forEach(answer => {
-        const participantId = answer.participants.id
-        const participantName = answer.participants.name
-        
-        if (!participantStats[participantId]) {
-          participantStats[participantId] = {
-            id: participantId,
-            name: participantName,
-            score: 0,
-            correct: 0,
-            total: 0,
-            avgTime: 0,
-            totalTime: 0
-          }
-        }
-        
-        participantStats[participantId].total++
-        participantStats[participantId].totalTime += answer.time_taken || 0
-        
-        if (answer.is_correct) {
-          participantStats[participantId].correct++
-          participantStats[participantId].score += answer.questions.points || 1
-        }
-      })
-
-      // Convert to array and calculate percentages
-      const leaderboard = Object.values(participantStats).map(participant => ({
-        ...participant,
-        percentage: participant.total > 0 ? Math.round((participant.correct / participant.total) * 100) : 0,
-        avgTime: participant.total > 0 ? Math.round(participant.totalTime / participant.total) : 0
-      })).sort((a, b) => {
-        // Sort by score first, then by avg time (faster is better)
-        if (b.score !== a.score) return b.score - a.score
-        return a.avgTime - b.avgTime
-      })
-
-      console.log('🏆 LIVE LEADERBOARD:', leaderboard)
-      setLiveResults(leaderboard)
-    } catch (error) {
-      console.error('💥 Error loading live results:', error)
-    }
-  }
-
   const startSession = async () => {
     try {
-      const { error } = await supabase
-        .from('quiz_sessions')
-        .update({ 
-          status: 'active',
-          started_at: new Date().toISOString()
-        })
-        .eq('id', sessionId)
-
-      if (error) throw error
+      const timerStartTime = Date.now()
+      await updateSession(sessionId, {
+        status: 'active',
+        startedAt: serverTimestamp(),
+        timerStartedAt: timerStartTime, // Projector's authoritative timer start time
+        currentTimeRemaining: session?.quiz?.timeLimit || 60,
+        lastTimerUpdate: timerStartTime
+      })
 
       // 🎵 SHOW START FANFARE!
       gameShowSounds.playShowStart()
 
-      setSession(prev => ({ 
-        ...prev, 
-        status: 'active',
-        started_at: new Date().toISOString()
-      }))
-
-      // Start loading live results immediately
-      setTimeout(loadLiveResults, 1000)
+      console.log('✅ Session started successfully - Projector is timer authority')
+      console.log('🕐 Timer started at:', new Date(timerStartTime).toISOString())
     } catch (error) {
       console.error('Error starting session:', error)
       alert('Error starting session. Please try again.')
@@ -300,24 +261,15 @@ function QuizSession() {
 
   const stopSession = async () => {
     try {
-      const { error } = await supabase
-        .from('quiz_sessions')
-        .update({ 
-          status: 'completed',
-          ended_at: new Date().toISOString()
-        })
-        .eq('id', sessionId)
-
-      if (error) throw error
+      await updateSession(sessionId, {
+        status: 'completed',
+        endedAt: new Date()
+      })
 
       // 🎵 QUIZ COMPLETE VICTORY SOUND!
       gameShowSounds.playQuizComplete()
 
-      setSession(prev => ({ 
-        ...prev, 
-        status: 'completed',
-        ended_at: new Date().toISOString()
-      }))
+      console.log('✅ Session stopped successfully')
 
       // Show confirmation and redirect to results
       setTimeout(() => {
@@ -335,10 +287,10 @@ function QuizSession() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--background-color, #f9fafb)' }}>
         <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
-          <p className="mt-4 text-gray-600">Loading session...</p>
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2" style={{ borderColor: 'var(--primary-color, #2563eb)' }}></div>
+          <p className="mt-4" style={{ color: 'var(--text-muted, #4b5563)' }}>Loading session...</p>
         </div>
       </div>
     )
@@ -346,86 +298,133 @@ function QuizSession() {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--background-color, #f9fafb)' }}>
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Session not found</h1>
-          <p className="text-gray-600">The quiz session you're looking for doesn't exist.</p>
+          <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--text-color, #111827)' }}>Session not found</h1>
+          <p style={{ color: 'var(--text-muted, #4b5563)' }}>The quiz session you're looking for doesn't exist.</p>
         </div>
       </div>
     )
   }
 
-  const sessionUrl = `${window.location.origin}/quiz/${session.session_code}`
+  const sessionUrl = `${window.location.origin}/quiz/${session.sessionCode}`
   
   // Debug the QR code URL
   console.log('🔗 QR Code URL:', sessionUrl)
   console.log('🌐 Current origin:', window.location.origin)
 
   return (
-    <div className="w-screen h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 relative overflow-hidden flex flex-col">
+    <div
+      className="w-screen h-screen relative overflow-hidden flex flex-col"
+      style={{ background: 'var(--game-gradient, linear-gradient(to bottom right, #581c87, #1e3a8a, #312e81))' }}
+    >
       {/* Animated background elements */}
-      <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/10 via-red-400/10 to-pink-400/10 animate-pulse"></div>
-      <div className="absolute -top-40 -right-40 w-80 h-80 bg-yellow-400/20 rounded-full blur-3xl animate-bounce"></div>
-      <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-400/20 rounded-full blur-3xl animate-bounce delay-1000"></div>
+      <div
+        className="absolute inset-0 animate-pulse"
+        style={{ background: 'var(--celebration-gradient-overlay, linear-gradient(to right, rgba(250,204,21,0.1), rgba(248,113,113,0.1), rgba(244,114,182,0.1)))' }}
+      ></div>
+      <div
+        className="absolute -top-40 -right-40 w-80 h-80 rounded-full blur-3xl animate-bounce"
+        style={{ backgroundColor: 'var(--accent-glow, rgba(250,204,21,0.2))' }}
+      ></div>
+      <div
+        className="absolute -bottom-40 -left-40 w-80 h-80 rounded-full blur-3xl animate-bounce delay-1000"
+        style={{ backgroundColor: 'var(--secondary-glow, rgba(192,132,252,0.2))' }}
+      ></div>
       
-      <header className="relative z-10 bg-gb-navy shadow-2xl border-b-4 border-gb-gold flex-shrink-0 h-20">
-        <div className="w-full px-4 py-2 h-full">
+      <header
+        className="relative z-10 shadow-2xl flex-shrink-0 h-24"
+        style={{
+          backgroundColor: 'var(--header-bg, #1e3a5f)',
+          borderBottom: '4px solid var(--brand-gold, #d4a841)'
+        }}
+      >
+        <div className="w-full px-4 py-3 h-full">
           <div className="flex justify-between items-center h-full">
             <div className="flex items-center gap-4">
               {/* Back Button - Only available before quiz starts */}
               <button
                 onClick={() => navigate('/admin')}
                 disabled={session?.status === 'active' || session?.status === 'completed'}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all ${
-                  session?.status === 'active' || session?.status === 'completed'
-                    ? 'text-gb-gold/30 cursor-not-allowed'
-                    : 'text-gb-gold hover:bg-gb-gold/20 hover:text-white'
-                }`}
+                className="flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-lg"
+                style={{
+                  color: session?.status === 'active' || session?.status === 'completed'
+                    ? 'var(--brand-gold-disabled, rgba(212,168,65,0.3))'
+                    : 'var(--brand-gold, #d4a841)',
+                  cursor: session?.status === 'active' || session?.status === 'completed'
+                    ? 'not-allowed'
+                    : 'pointer'
+                }}
                 title={session?.status === 'active' || session?.status === 'completed' ? 'Cannot go back during active quiz' : 'Back to Dashboard'}
               >
-                <ArrowLeft className="w-5 h-5" />
-                <span className="hidden sm:inline">Back</span>
+                <ArrowLeft className="w-6 h-6" />
+                <span className="hidden sm:inline font-semibold">Back</span>
               </button>
-              <img src="/gbname.png" alt="GB Logo" className="h-8" />
+              <img src="/gbname.png" alt="GB Logo" className="h-20" />
               <div>
-                <h1 className="text-xl font-bold text-gb-gold drop-shadow-lg font-serif">
-                  {session.quizzes.title}
+                <h1
+                  className="text-2xl font-bold drop-shadow-lg font-serif"
+                  style={{ color: 'var(--brand-gold, #d4a841)' }}
+                >
+                  {session.quiz.title}
                 </h1>
-                <p className="text-gb-gold/80 text-sm font-medium">Live Training Quiz</p>
+                <p
+                  className="text-base font-medium"
+                  style={{ color: 'var(--brand-gold-muted, rgba(212,168,65,0.8))' }}
+                >Live Training Quiz</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className={`px-3 py-2 rounded-lg text-sm font-semibold tracking-wide shadow-lg transition-all ${
-                session.status === 'waiting' ? 'bg-gb-gold text-gb-navy' :
-                session.status === 'active' ? 'bg-green-600 text-white animate-pulse' :
-                'bg-gray-600 text-white'
-              }`}>
+            <div className="flex items-center gap-4">
+              <div
+                className={`px-5 py-3 rounded-lg text-lg font-semibold tracking-wide shadow-lg transition-all ${
+                  session.status === 'active' ? 'animate-pulse' : ''
+                }`}
+                style={{
+                  backgroundColor: session.status === 'waiting'
+                    ? 'var(--brand-gold, #d4a841)'
+                    : session.status === 'active'
+                    ? 'var(--success-color, #16a34a)'
+                    : 'var(--neutral-color, #4b5563)',
+                  color: session.status === 'waiting'
+                    ? 'var(--brand-navy, #1e3a5f)'
+                    : '#ffffff'
+                }}
+              >
                 {session.status === 'waiting' && 'Ready to Start'}
                 {session.status === 'active' && '● LIVE'}
                 {session.status === 'completed' && '✓ Completed'}
               </div>
               {session.status === 'waiting' && (
-                <button 
+                <button
                   onClick={startSession}
-                  className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg font-bold hover:bg-gb-gold-light flex items-center gap-2 shadow-lg transition-all"
+                  className="px-6 py-3 rounded-lg text-lg font-bold flex items-center gap-3 shadow-lg transition-all hover:opacity-90"
+                  style={{
+                    backgroundColor: 'var(--brand-gold, #d4a841)',
+                    color: 'var(--brand-navy, #1e3a5f)'
+                  }}
                 >
-                  <Play className="w-5 h-5" />
+                  <Play className="w-6 h-6" />
                   Start Quiz
                 </button>
               )}
               {session.status === 'active' && (
-                <button 
+                <button
                   onClick={stopSession}
-                  className="bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 flex items-center gap-2 shadow-lg transition-all"
+                  className="px-6 py-3 rounded-lg text-lg font-bold flex items-center gap-3 shadow-lg transition-all hover:opacity-90"
+                  style={{ backgroundColor: 'var(--error-color, #dc2626)', color: '#ffffff' }}
                 >
-                  <Square className="w-5 h-5" />
+                  <Square className="w-6 h-6" />
                   End Quiz
                 </button>
               )}
               {session.status === 'completed' && (
-                <button 
+                <button
                   onClick={viewResults}
-                  className="bg-gb-gold text-gb-navy px-4 py-2 rounded-lg font-bold hover:bg-gb-gold-light flex items-center gap-2 shadow-lg transition-all"
+                  className="px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-lg transition-all hover:opacity-90"
+                  style={{
+                    backgroundColor: 'var(--brand-gold, #d4a841)',
+                    color: 'var(--brand-navy, #1e3a5f)'
+                  }}
                 >
                   <Trophy className="w-5 h-5" />
                   View Results
@@ -436,245 +435,322 @@ function QuizSession() {
         </div>
       </header>
 
-      <main className="relative z-10 flex-1 px-4 py-2 overflow-hidden" style={{ height: 'calc(100vh - 5rem)' }}>
-        <div className="grid grid-cols-4 gap-3 h-full">
-          <div className="col-span-3 flex flex-col gap-3 h-full">
-            {/* Participants Section - Professional V2 */}
-            <div className={`bg-gb-navy/95 backdrop-blur-sm rounded-xl shadow-2xl p-4 border-2 border-gb-gold flex flex-col ${
-              session.status === 'active' ? 'h-1/2' : 'h-full'
-            } overflow-hidden`}>
-              <div className="flex justify-between items-center mb-2 flex-shrink-0">
-                <div className="flex items-center gap-2">
-                  <div className="bg-gb-gold p-1.5 rounded-lg">
-                    <Users className="w-4 h-4 text-gb-navy" />
+      <main className="relative z-10 flex-1 min-h-0 p-4">
+        <div className="grid grid-cols-2 gap-4 h-full max-h-full">
+          <div className="col-span-1 flex flex-col gap-4 h-full min-h-0">
+            {/* Participants Section */}
+            <div
+              className="backdrop-blur-sm rounded-xl shadow-2xl p-4 flex flex-col flex-1 min-h-0 overflow-hidden"
+              style={{
+                backgroundColor: 'var(--card-bg, rgba(30,58,95,0.95))',
+                border: '2px solid var(--brand-gold, #d4a841)'
+              }}
+            >
+              <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <div
+                    className="p-2 rounded-lg"
+                    style={{ backgroundColor: 'var(--brand-gold, #d4a841)' }}
+                  >
+                    <Users className="w-5 h-5" style={{ color: 'var(--brand-navy, #1e3a5f)' }} />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-white">Training Participants</h2>
-                    <p className="text-gb-gold text-xs font-medium">Live Session Management</p>
+                    <h2 className="text-lg font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Training Participants</h2>
+                    <p className="text-sm font-medium" style={{ color: 'var(--brand-gold, #d4a841)' }}>Live Session Management</p>
                   </div>
                 </div>
-                <button
-                  onClick={loadParticipants}
-                  className="px-3 py-1.5 bg-gb-gold text-gb-navy rounded-lg hover:bg-gb-gold-light font-bold shadow-lg transition-all text-xs flex items-center gap-2"
-                >
-                  <span>Refresh</span>
-                </button>
+                <div
+                className="px-3 py-2 rounded-lg font-bold shadow-lg text-sm flex items-center gap-2"
+                style={{
+                  backgroundColor: realtimeConnected
+                    ? 'var(--success-color, #22c55e)'
+                    : 'var(--error-color, #ef4444)',
+                  color: '#ffffff'
+                }}
+              >
+                  <div className={`w-2 h-2 rounded-full ${realtimeConnected ? 'animate-pulse' : ''}`} style={{ backgroundColor: 'var(--surface-color, #ffffff)' }}></div>
+                  <span>{realtimeConnected ? 'Live' : 'Offline'}</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between mb-2 bg-gb-gold/10 rounded-lg p-2 flex-shrink-0 border border-gb-gold/30">
-                <div className="flex items-center gap-2">
-                  <div className="bg-gb-gold/20 p-1 rounded-full">
-                    <Users className="w-4 h-4 text-gb-gold" />
+              <div
+                className="flex items-center justify-between mb-3 rounded-lg p-3 flex-shrink-0"
+                style={{
+                  backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.1))',
+                  border: '1px solid var(--brand-gold-border, rgba(212,168,65,0.3))'
+                }}
+              >
+                <div className="flex items-center gap-4">
+                  <div
+                    className="p-1.5 rounded-full"
+                    style={{ backgroundColor: 'var(--brand-gold-light, rgba(212,168,65,0.2))' }}
+                  >
+                    <Users className="w-5 h-5" style={{ color: 'var(--brand-gold, #d4a841)' }} />
                   </div>
-                  <div>
-                    <span className="text-xl font-bold text-gb-gold">{participants.length}</span>
-                    <span className="text-white text-xs font-medium ml-2">Active Participants</span>
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <span className="text-xl font-bold" style={{ color: 'var(--brand-gold, #d4a841)' }}>{participants.length}</span>
+                      <span className="text-sm font-medium ml-2" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Total</span>
+                    </div>
+                    {liveResults.length > 0 && (
+                      <>
+                        <div className="w-px h-6" style={{ backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.3))' }}></div>
+                        <div>
+                          <span className="text-xl font-bold" style={{ color: 'var(--success-text, #4ade80)' }}>{liveResults.filter(p => p.completed).length}</span>
+                          <span className="text-sm font-medium ml-2" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Completed</span>
+                        </div>
+                        <div className="w-px h-6" style={{ backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.3))' }}></div>
+                        <div>
+                          <span className="text-xl font-bold" style={{ color: 'var(--warning-text, #facc15)' }}>{session?.status === 'waiting' ? participants.filter(p => !p.completed).length : liveResults.filter(p => !p.completed).length}</span>
+                          <span className="text-sm font-medium ml-2" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{session?.status === 'waiting' ? 'Waiting' : 'In Progress'}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs text-gb-gold/80 uppercase tracking-wide">Gustav Barkhuysen</div>
-                  <div className="text-xs text-white font-medium">Training Session</div>
+                  <div
+                    className="text-sm uppercase tracking-wide"
+                    style={{ color: 'var(--brand-gold-muted, rgba(212,168,65,0.8))' }}
+                  >Gustav Barkhuysen</div>
+                  <div className="text-sm font-medium" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Training Session</div>
                 </div>
               </div>
               
-              <div className="space-y-1 flex-1 overflow-y-auto min-h-0">
+              <div className="flex-1 overflow-y-auto min-h-0">
                 {participants.length === 0 ? (
-                  <div className="text-center py-6 bg-gb-gold/5 rounded-xl border border-gb-gold/20 h-full flex flex-col items-center justify-center">
-                    <div className="bg-gb-gold/10 p-3 rounded-full w-16 h-16 mx-auto mb-3 flex items-center justify-center">
-                      <Users className="w-8 h-8 text-gb-gold" />
+                  <div
+                    className="text-center py-8 rounded-xl h-full flex flex-col items-center justify-center"
+                    style={{
+                      backgroundColor: 'var(--brand-gold-faint, rgba(212,168,65,0.05))',
+                      border: '1px solid var(--brand-gold-border, rgba(212,168,65,0.2))'
+                    }}
+                  >
+                    <div
+                      className="p-4 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center"
+                      style={{ backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.1))' }}
+                    >
+                      <Users className="w-8 h-8" style={{ color: 'var(--brand-gold, #d4a841)' }} />
                     </div>
-                    <p className="text-white text-base font-bold mb-1">Awaiting Training Participants</p>
-                    <p className="text-gb-gold/80 text-xs">Share QR code to begin session</p>
+                    <p className="text-lg font-bold mb-2" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Awaiting Training Participants</p>
+                    <p className="text-sm" style={{ color: 'var(--brand-gold-muted, rgba(212,168,65,0.8))' }}>Share QR code to begin session</p>
                   </div>
                 ) : (
-                  participants.map((participant, index) => (
-                    <div key={participant.id} className="flex items-center justify-between py-2 px-3 bg-white/5 hover:bg-white/10 rounded-lg border border-gb-gold/20 transition-all group">
-                      <div className="flex items-center gap-3">
-                        <div className="w-6 h-6 bg-gb-gold rounded-lg flex items-center justify-center text-gb-navy font-bold text-xs shadow-lg">
-                          {index + 1}
-                        </div>
-                        <div>
-                          <span className="text-white font-bold text-sm">{participant.name}</span>
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <span className="text-gb-gold text-xs font-medium bg-gb-gold/10 px-1.5 py-0.5 rounded">✓ Ready</span>
-                            <span className="text-white/60 text-xs">Training Participant</span>
+                  <div className="space-y-2">
+                    {participants.map((participant, index) => {
+                      // Check completion status from both participant data and live results
+                      const liveResult = liveResults.find(lr => lr.id === participant.id)
+                      const isCompleted = participant.completed || liveResult?.completed || false
+
+                      return (
+                        <div
+                          key={participant.id}
+                          className="flex items-center justify-between py-3 px-4 rounded-lg border transition-all group"
+                          style={{
+                            backgroundColor: isCompleted
+                              ? 'var(--success-bg-transparent, rgba(34,197,94,0.1))'
+                              : 'rgba(255,255,255,0.05)',
+                            borderColor: isCompleted
+                              ? 'var(--success-border, rgba(74,222,128,0.3))'
+                              : 'var(--brand-gold-transparent, rgba(212,168,65,0.2))'
+                          }}
+                        >
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div
+                              className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shadow-lg flex-shrink-0"
+                              style={{
+                                backgroundColor: isCompleted
+                                  ? 'var(--success-color, #22c55e)'
+                                  : 'var(--brand-gold, #d4a841)',
+                                color: isCompleted ? '#ffffff' : 'var(--brand-navy, #1e3a5f)'
+                              }}
+                            >
+                              {isCompleted ? '✓' : index + 1}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="font-bold text-base truncate block" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{participant.name}</span>
+                              <div className="flex items-center gap-2 mt-1">
+                                {isCompleted ? (
+                                  <span
+                                    className="text-sm font-medium px-2 py-0.5 rounded"
+                                    style={{ color: 'var(--success-text, #4ade80)', backgroundColor: 'var(--success-bg-transparent, rgba(74,222,128,0.1))' }}
+                                  >
+                                    Completed
+                                  </span>
+                                ) : session?.status === 'waiting' ? (
+                                  <span
+                                    className="text-sm font-medium px-2 py-0.5 rounded"
+                                    style={{ color: 'var(--info-text, #60a5fa)', backgroundColor: 'var(--info-bg-transparent, rgba(96,165,250,0.1))' }}
+                                  >
+                                    Waiting
+                                  </span>
+                                ) : session?.status === 'active' ? (
+                                  <span
+                                    className="text-sm font-medium px-2 py-0.5 rounded"
+                                    style={{ color: 'var(--brand-gold, #d4a841)', backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.1))' }}
+                                  >
+                                    In Progress
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="text-sm font-medium px-2 py-0.5 rounded"
+                                    style={{ color: 'var(--text-muted, #9ca3af)', backgroundColor: 'rgba(156,163,175,0.1)' }}
+                                  >
+                                    Ready
+                                  </span>
+                                )}
+                                <span className="text-sm" style={{ color: 'var(--text-on-primary-muted, rgba(255,255,255,0.6))' }}>Training Participant</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {isCompleted && (
+                              <div
+                                className="text-lg animate-pulse"
+                                style={{ color: 'var(--success-text, #4ade80)' }}
+                              >
+                                Trophy
+                              </div>
+                            )}
+                            <button
+                              onClick={() => kickParticipant(participant.id, participant.name)}
+                              className="w-8 h-8 rounded-lg flex items-center justify-center transition-all group shadow-lg hover:shadow-xl hover:opacity-90 flex-shrink-0"
+                              style={{ backgroundColor: 'var(--error-color, #dc2626)' }}
+                              title={`Remove ${participant.name}`}
+                            >
+                              <X className="w-4 h-4 group-hover:scale-110 transition-transform" style={{ color: 'var(--text-on-primary-color, #ffffff)' }} />
+                            </button>
                           </div>
                         </div>
-                      </div>
-                      <button
-                        onClick={() => kickParticipant(participant.id, participant.name)}
-                        className="w-6 h-6 bg-red-600 hover:bg-red-700 rounded-lg flex items-center justify-center transition-all group shadow-lg hover:shadow-xl"
-                        title={`Remove ${participant.name}`}
-                      >
-                        <X className="w-3 h-3 text-white group-hover:scale-110 transition-transform" />
-                      </button>
-                    </div>
-                  ))
+                      )
+                    })}
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Live Results Section - Professional V2 */}
-            {session.status === 'active' && (
-              <div className="bg-gb-navy/95 backdrop-blur-sm rounded-xl shadow-2xl p-4 border-2 border-gb-gold flex flex-col h-1/2 overflow-hidden">
-                <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                  <div className="flex items-center gap-2">
-                    <div className="bg-gb-gold p-1.5 rounded-lg">
-                      <Trophy className="w-4 h-4 text-gb-navy" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-bold text-white">Live Performance Tracking</h2>
-                      <p className="text-gb-gold text-xs font-medium flex items-center gap-1">
-                        <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                        Real-time Results
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-gb-gold/80 uppercase tracking-wide">GB Training</div>
-                    <div className="text-xs text-white font-medium">Analytics Dashboard</div>
-                  </div>
-                </div>
-                
-                {liveResults.length > 0 ? (
-                  <div className="flex-1 min-h-0 flex flex-col">
-                    <div className="grid grid-cols-3 gap-1 mb-2 flex-shrink-0">
-                      <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
-                        <div className="text-sm font-bold text-gb-gold">
-                          {Math.round(liveResults.reduce((sum, p) => sum + p.percentage, 0) / liveResults.length) || 0}%
-                        </div>
-                        <div className="text-white font-medium text-xs">Avg Score</div>
-                      </div>
-                      <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
-                        <div className="text-sm font-bold text-gb-gold">
-                          {liveResults.length > 0 ? Math.max(...liveResults.map(p => p.total)) : 0}/{session.quizzes.questions?.length || 0}
-                        </div>
-                        <div className="text-white font-medium text-xs">Progress</div>
-                      </div>
-                      <div className="text-center bg-white/10 rounded-lg p-1.5 border border-gb-gold/20">
-                        <div className="text-sm font-bold text-gb-gold">
-                          {liveResults.length > 0 ? Math.round(liveResults.reduce((sum, p) => sum + p.avgTime, 0) / liveResults.length) : 0}s
-                        </div>
-                        <div className="text-white font-medium text-xs">Avg Time</div>
-                      </div>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
-                      {liveResults.map((participant, index) => (
-                        <div key={participant.id} className={`flex items-center justify-between p-2 rounded-lg transition-all border ${
-                          index === 0 ? 'bg-gradient-to-r from-yellow-500/40 to-orange-500/40 border-yellow-400' :
-                          index === 1 ? 'bg-gradient-to-r from-gray-400/40 to-slate-500/40 border-gray-400' :
-                          index === 2 ? 'bg-gradient-to-r from-orange-500/40 to-red-500/40 border-orange-400' :
-                          'bg-gradient-to-r from-indigo-500/30 to-purple-500/30 border-indigo-400/50'
-                        }`}>
-                          <div className="flex items-center gap-2">
-                            <span className={`font-bold text-sm ${
-                              index === 0 ? 'text-yellow-300' :
-                              index === 1 ? 'text-gray-300' :
-                              index === 2 ? 'text-orange-300' :
-                              'text-white'
-                            }`}>
-                              {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
-                            </span>
-                            <span className="font-bold text-white text-xs">{participant.name}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="text-green-300 font-bold">🎯 {participant.score}</span>
-                            <span className="text-blue-300 font-semibold">📊 {participant.percentage}%</span>
-                            <span className="text-purple-300 font-semibold">⚡ {participant.avgTime}s</span>
-                            {participant.correct === participant.total && participant.total > 0 && (
-                              <span className="text-yellow-300 font-bold text-xs">🌟</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-xl h-full flex flex-col items-center justify-center">
-                    <div className="text-3xl mb-2">🎪</div>
-                    <p className="text-white text-base font-bold mb-1">🎯 Arena is heating up!</p>
-                    <p className="text-yellow-200 text-xs">Live results will appear as contestants answer!</p>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
-          <div className="flex flex-col gap-3 h-full">
-            <div className="bg-gb-navy/95 backdrop-blur-sm rounded-xl shadow-2xl p-3 border-2 border-gb-gold relative overflow-hidden h-80">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="bg-gb-gold p-1.5 rounded-lg">
-                  <Target className="w-4 h-4 text-gb-navy" />
+          <div className="flex flex-col gap-4 h-full min-h-0">
+            {/* QR Code Section */}
+            <div
+              className="backdrop-blur-sm rounded-xl shadow-2xl p-4 flex flex-col min-h-0"
+              style={{
+                backgroundColor: 'var(--card-bg, rgba(30,58,95,0.95))',
+                border: '2px solid var(--brand-gold, #d4a841)'
+              }}
+            >
+              <div className="flex items-center gap-3 mb-3 flex-shrink-0">
+                <div
+                  className="p-2 rounded-lg"
+                  style={{ backgroundColor: 'var(--brand-gold, #d4a841)' }}
+                >
+                  <Target className="w-5 h-5" style={{ color: 'var(--brand-navy, #1e3a5f)' }} />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-white">Session Access</h2>
-                  <p className="text-gb-gold text-xs font-medium">Participant Entry Portal</p>
+                  <h2 className="text-lg font-bold" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Session Access</h2>
+                  <p className="text-sm font-medium" style={{ color: 'var(--brand-gold, #d4a841)' }}>Participant Entry Portal</p>
                 </div>
               </div>
-              
-              <div className="text-center relative">
-                <div className="bg-white p-3 rounded-xl border-2 border-gb-gold mb-2 inline-block shadow-2xl">
-                  <QRCode 
-                    value={sessionUrl} 
-                    size={100}
+
+              <div className="text-center flex-1 flex flex-col justify-center min-h-0">
+                <div
+                  className="p-4 rounded-xl mb-4 shadow-2xl mx-auto flex-shrink-0"
+                  style={{ backgroundColor: 'var(--surface-color, #ffffff)', border: '2px solid var(--brand-gold, #d4a841)' }}
+                >
+                  <QRCode
+                    value={sessionUrl}
+                    size={qrSize}
                     level="M"
                   />
                 </div>
-                
-                <div className="bg-gb-gold/10 rounded-lg p-2 border border-gb-gold/30 mb-2">
-                  <div className="text-gb-gold text-xs font-bold uppercase tracking-wide mb-1">Session URL</div>
-                  <p className="text-white text-xs font-mono break-all">{sessionUrl}</p>
-                </div>
-                
-                <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
-                  <div className="text-xs text-gb-gold/80 uppercase tracking-wide mb-1">Gustav Barkhuysen Attorneys</div>
-                  <div className="text-xs text-white font-medium">Professional Training Portal</div>
+
+                <div
+                  className="rounded-lg p-2 flex-shrink-0"
+                  style={{
+                    backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.1))',
+                    border: '1px solid var(--brand-gold-border, rgba(212,168,65,0.3))'
+                  }}
+                >
+                  <div
+                    className="text-xs font-bold uppercase tracking-wide mb-1"
+                    style={{ color: 'var(--brand-gold, #d4a841)' }}
+                  >Session URL</div>
+                  <p className="text-sm font-mono break-all" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{sessionUrl}</p>
                 </div>
               </div>
             </div>
 
-            <div className="bg-gb-navy/95 backdrop-blur-sm rounded-xl shadow-2xl p-3 border-2 border-gb-gold flex-1 overflow-hidden">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="bg-gb-gold p-1.5 rounded-lg">
-                  <Clock className="w-4 h-4 text-gb-navy" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-white">Session Details</h2>
-                  <p className="text-gb-gold text-xs font-medium">Quiz Configuration</p>
-                </div>
+            {/* Timer Display - Redesigned for better UX */}
+            <div
+              className="backdrop-blur-sm rounded-xl shadow-2xl flex-1 min-h-0 overflow-hidden flex flex-col"
+              style={{
+                backgroundColor: 'var(--card-bg, rgba(30,58,95,0.95))',
+                border: '2px solid var(--brand-gold, #d4a841)'
+              }}
+            >
+
+              {/* Timer Section - Dominant */}
+              <div className="flex-1 flex flex-col justify-center items-center text-center p-6">
+                {session?.status === 'active' ? (
+                  <>
+                    <div
+                      className={`text-7xl font-mono font-bold mb-2 ${timeRemaining <= 30 ? 'animate-pulse' : ''}`}
+                      style={{
+                        color: timeRemaining <= 30
+                          ? 'var(--error-text, #f87171)'
+                          : timeRemaining <= 60
+                          ? 'var(--warning-text, #facc15)'
+                          : 'var(--brand-gold, #d4a841)'
+                      }}
+                    >
+                      {formatTime(timeRemaining)}
+                    </div>
+                    <div className="text-sm font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Time Remaining</div>
+                    {timeRemaining <= 30 && timeRemaining > 0 && (
+                      <div
+                        className="text-xs font-bold animate-bounce"
+                        style={{ color: 'var(--error-text, #f87171)' }}
+                      >
+                        FINAL COUNTDOWN
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div
+                      className="text-5xl font-mono font-bold mb-2"
+                      style={{ color: 'var(--brand-gold, #d4a841)' }}
+                    >
+                      {formatTime(session?.quiz?.timeLimit)}
+                    </div>
+                    <div className="text-sm font-medium uppercase tracking-wider" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>Quiz Duration</div>
+                    <div
+                      className="text-xs mt-1"
+                      style={{ color: 'var(--brand-gold-muted, rgba(212,168,65,0.7))' }}
+                    >
+                      {session?.status === 'waiting' ? 'Timer will start when quiz begins' : 'Quiz completed'}
+                    </div>
+                  </>
+                )}
               </div>
-              
-              <div className="space-y-2 flex-1 overflow-y-auto">
-                <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
-                  <div className="flex justify-between items-center">
-                    <span className="text-white font-medium text-xs">Duration</span>
-                    <span className="text-gb-gold font-bold text-sm">{Math.floor(session.quizzes.time_limit / 60)} min</span>
+
+              {/* Quiz Details - Compact footer */}
+              <div
+                className="rounded-b-xl px-4 py-3 flex-shrink-0"
+                style={{
+                  backgroundColor: 'var(--brand-gold-transparent, rgba(212,168,65,0.1))',
+                  borderTop: '1px solid var(--brand-gold-border, rgba(212,168,65,0.2))'
+                }}
+              >
+                <div className="flex items-center justify-center text-center">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: 'var(--brand-gold, #d4a841)' }}
+                    ></div>
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-on-primary-color, #ffffff)' }}>{session?.quiz?.questions?.length || 0} Questions</span>
                   </div>
                 </div>
-                
-                <div className="bg-gb-gold/5 rounded-lg p-2 border border-gb-gold/20">
-                  <div className="flex justify-between items-center">
-                    <span className="text-white font-medium text-xs">Status</span>
-                    <span className={`font-bold text-xs uppercase px-2 py-1 rounded-full ${
-                      session.status === 'waiting' ? 'text-yellow-800 bg-yellow-300' :
-                      session.status === 'active' ? 'text-green-800 bg-green-300 animate-pulse' :
-                      'text-purple-800 bg-purple-300'
-                    }`}>
-                      {session.status === 'waiting' && 'Preparing'}
-                      {session.status === 'active' && 'Active'}
-                      {session.status === 'completed' && 'Complete'}
-                    </span>
-                  </div>
-                </div>
-                
-                <div className="bg-gb-gold/10 rounded-lg p-2 border-2 border-gb-gold/30">
-                  <div className="flex justify-between items-center">
-                    <span className="text-white font-bold text-xs">Questions</span>
-                    <span className="text-gb-gold font-bold text-lg">{session.quizzes.questions?.length || 0}</span>
-                  </div>
-                  <div className="text-xs text-gb-gold/80 mt-1">Training Assessment Points</div>
-                </div>
-                
               </div>
             </div>
           </div>

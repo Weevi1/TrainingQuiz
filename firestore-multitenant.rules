@@ -1,0 +1,183 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for multi-tenant access control
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserId() {
+      return request.auth.uid;
+    }
+
+    function isOrgMember(orgId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(getUserId())) &&
+        orgId in get(/databases/$(database)/documents/users/$(getUserId())).data.organizations;
+    }
+
+    function getUserRole(orgId) {
+      return get(/databases/$(database)/documents/users/$(getUserId())).data.organizations[orgId].role;
+    }
+
+    function hasRole(orgId, role) {
+      return isOrgMember(orgId) && getUserRole(orgId) == role;
+    }
+
+    function hasMinRole(orgId, minRole) {
+      let userRole = getUserRole(orgId);
+      let roleHierarchy = ['PARTICIPANT', 'TRAINER', 'ORG_ADMIN', 'ORG_OWNER', 'PLATFORM_ADMIN'];
+      let userRoleIndex = roleHierarchy.indexOf(userRole);
+      let minRoleIndex = roleHierarchy.indexOf(minRole);
+      return userRoleIndex >= minRoleIndex;
+    }
+
+    function isPlatformAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(getUserId())) &&
+        get(/databases/$(database)/documents/users/$(getUserId())).data.platformRole == 'PLATFORM_ADMIN';
+    }
+
+    // Global user profiles
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && getUserId() == userId;
+      allow read: if isPlatformAdmin();
+    }
+
+    // Platform admin collections
+    match /platform_admin/{document=**} {
+      allow read, write: if isPlatformAdmin();
+    }
+
+    // Development environment collections (dev- prefix)
+    match /dev-organizations/{orgId} {
+      allow read, write: if isPlatformAdmin() || isOrgMember(orgId);
+
+      match /{document=**} {
+        allow read, write: if isPlatformAdmin() || isOrgMember(orgId);
+      }
+    }
+
+    match /dev-sessions/{sessionId} {
+      allow read: if true; // Public read for QR code joining
+      allow write: if isAuthenticated(); // Authenticated users can create/manage sessions
+
+      match /{document=**} {
+        allow read, write: if true; // Allow participant interactions
+      }
+    }
+
+    // Staging environment collections (staging- prefix)
+    match /staging-organizations/{orgId} {
+      allow read, write: if isPlatformAdmin() || isOrgMember(orgId);
+
+      match /{document=**} {
+        allow read, write: if isPlatformAdmin() || isOrgMember(orgId);
+      }
+    }
+
+    match /staging-sessions/{sessionId} {
+      allow read: if true; // Public read for QR code joining
+      allow write: if isAuthenticated(); // Authenticated users can create/manage sessions
+
+      match /{document=**} {
+        allow read, write: if true; // Allow participant interactions
+      }
+    }
+
+    // Production environment collections (no prefix)
+    match /organizations/{orgId} {
+      // Organization owners and platform admins can read/write organization data
+      allow read, write: if isPlatformAdmin() || hasMinRole(orgId, 'ORG_OWNER');
+      // Organization members can read organization data
+      allow read: if isOrgMember(orgId);
+
+      // Trainers subcollection
+      match /trainers/{trainerId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isPlatformAdmin() || hasMinRole(orgId, 'ORG_ADMIN');
+      }
+
+      // Sessions subcollection
+      match /sessions/{sessionId} {
+        allow read: if true; // Public read for QR code joining
+        allow write: if isOrgMember(orgId) && hasMinRole(orgId, 'TRAINER');
+
+        // Participants subcollection
+        match /participants/{participantId} {
+          allow read, create, update: if true; // Anyone can join and participate
+          allow delete: if isOrgMember(orgId) && hasMinRole(orgId, 'TRAINER');
+        }
+
+        // Game state and results
+        match /{document=**} {
+          allow read: if true;
+          allow write: if isOrgMember(orgId) && hasMinRole(orgId, 'TRAINER');
+        }
+      }
+
+      // Analytics subcollection
+      match /analytics/{document=**} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isPlatformAdmin() || hasMinRole(orgId, 'TRAINER');
+      }
+
+      // Billing and subscription data
+      match /billing/{document=**} {
+        allow read, write: if isPlatformAdmin() || hasMinRole(orgId, 'ORG_OWNER');
+      }
+
+      // Settings and branding
+      match /settings/{document=**} {
+        allow read: if isOrgMember(orgId);
+        allow write: if isPlatformAdmin() || hasMinRole(orgId, 'ORG_ADMIN');
+      }
+    }
+
+    // Legacy collections (for migration compatibility)
+    // These will be removed after migration is complete
+    match /quizzes/{quizId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() &&
+        (getUserId() == resource.data.trainerId ||
+         getUserId() == "vpPIThxGyFhQSPw7pllSE1XPaEo1");
+    }
+
+    match /sessions/{sessionId} {
+      allow read: if true;
+      allow write: if isAuthenticated() &&
+        (getUserId() == resource.data.trainerId ||
+         getUserId() == "vpPIThxGyFhQSPw7pllSE1XPaEo1");
+
+      match /{document=**} {
+        allow read, create, update: if true;
+        allow delete: if isAuthenticated();
+      }
+    }
+
+    match /scratch_sessions/{sessionId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() &&
+        (getUserId() == resource.data.trainerId ||
+         getUserId() == "vpPIThxGyFhQSPw7pllSE1XPaEo1");
+
+      match /{document=**} {
+        allow read, create, update: if true;
+        allow delete: if isAuthenticated();
+      }
+    }
+
+    match /trainers/{trainerId} {
+      allow read, write: if isAuthenticated() && getUserId() == trainerId;
+    }
+
+    // Fallback for other collections during development
+    match /{document=**} {
+      allow read, write: if isPlatformAdmin();
+    }
+  }
+}
