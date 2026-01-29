@@ -1,14 +1,17 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Users, Play, Clock, AlertCircle, CheckCircle, QrCode } from 'lucide-react'
-import { FirestoreService, type GameSession } from '../lib/firestore'
+import { Users, Play, Clock, AlertCircle, CheckCircle, QrCode, UserPlus } from 'lucide-react'
+import { FirestoreService, type GameSession, type Organization } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
+import { soundSystem } from '../lib/soundSystem'
+import { applyOrganizationBranding } from '../lib/applyBranding'
 
 interface Participant {
   id: string
   name: string
   joinedAt: Date
   isReady: boolean
+  avatar?: string
 }
 
 export const JoinSession: React.FC = () => {
@@ -23,6 +26,13 @@ export const JoinSession: React.FC = () => {
   const [joining, setJoining] = useState(false)
   const [joined, setJoined] = useState(false)
   const [error, setError] = useState('')
+  const [organization, setOrganization] = useState<Organization | null>(null)
+  const [newParticipantName, setNewParticipantName] = useState<string | null>(null) // For toast notification
+  const [selectedAvatar, setSelectedAvatar] = useState('😀')
+  const previousParticipantCountRef = useRef(0)
+
+  // Avatar options
+  const AVATAR_OPTIONS = ['😀', '😎', '🤓', '🦊', '🐱', '🐼', '🦁', '🐸', '🦄', '🌟', '🚀', '💪']
 
   // Auto-search for session when code is provided in URL
   useEffect(() => {
@@ -30,6 +40,48 @@ export const JoinSession: React.FC = () => {
       findSession(sessionCode)
     }
   }, [sessionCode])
+
+  // Real-time subscription to participants
+  useEffect(() => {
+    if (!session?.id) return
+
+    const unsubscribe = FirestoreService.subscribeToSessionParticipants(
+      session.id,
+      (newParticipants) => {
+        const mappedParticipants = newParticipants.map(p => ({
+          id: p.id,
+          name: p.name,
+          joinedAt: p.joinedAt,
+          isReady: p.isReady,
+          avatar: (p as any).avatar || '😀'
+        }))
+
+        // Check if a new participant joined
+        if (mappedParticipants.length > previousParticipantCountRef.current) {
+          // Find the new participant (most recently joined)
+          const sortedByJoinTime = [...mappedParticipants].sort(
+            (a, b) => (b.joinedAt?.getTime() || 0) - (a.joinedAt?.getTime() || 0)
+          )
+          const newestParticipant = sortedByJoinTime[0]
+
+          if (newestParticipant) {
+            setNewParticipantName(newestParticipant.name)
+            soundSystem.play('participantJoin')
+
+            // Hide toast after 3 seconds
+            setTimeout(() => {
+              setNewParticipantName(null)
+            }, 3000)
+          }
+        }
+
+        previousParticipantCountRef.current = mappedParticipants.length
+        setParticipants(mappedParticipants)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [session?.id])
 
   const findSession = async (code: string) => {
     if (!code.trim()) {
@@ -53,14 +105,28 @@ export const JoinSession: React.FC = () => {
 
       setSession(foundSession)
 
-      // Load real participants from Firestore
+      // Load organization branding
+      try {
+        const org = await FirestoreService.getOrganization(foundSession.organizationId)
+        if (org) {
+          setOrganization(org)
+          await applyOrganizationBranding(org.branding)
+        }
+      } catch (orgError) {
+        console.error('Error loading organization branding:', orgError)
+      }
+
+      // Load initial participants from Firestore
       const sessionParticipants = await FirestoreService.getSessionParticipants(foundSession.id)
-      setParticipants(sessionParticipants.map(p => ({
+      const mappedParticipants = sessionParticipants.map(p => ({
         id: p.id,
         name: p.name,
         joinedAt: p.joinedAt,
-        isReady: p.status === 'ready' || p.status === 'playing'
-      })))
+        isReady: p.isReady,
+        avatar: (p as any).avatar || '😀'
+      }))
+      setParticipants(mappedParticipants)
+      previousParticipantCountRef.current = mappedParticipants.length
 
     } catch (error) {
       console.error('Error finding session:', error)
@@ -101,8 +167,8 @@ export const JoinSession: React.FC = () => {
     setError('')
 
     try {
-      // Add participant to session in Firestore
-      const participantId = await FirestoreService.addParticipantToSession(session.id, participantName)
+      // Add participant to session in Firestore (with avatar)
+      const participantId = await FirestoreService.addParticipantToSession(session.id, participantName, selectedAvatar)
 
       if (!participantId) {
         throw new Error('Failed to create participant record')
@@ -117,7 +183,8 @@ export const JoinSession: React.FC = () => {
             participantName,
             participantId,
             sessionId: session.id,
-            gameType: session.gameType
+            gameType: session.gameType,
+            avatar: selectedAvatar
           }
         })
       }, 1500)
@@ -162,12 +229,71 @@ export const JoinSession: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--background-color)' }}>
+
+      {/* New Participant Toast Notification */}
+      {newParticipantName && (
+        <div
+          className="fixed top-4 right-4 z-50 animate-slide-in-right"
+          style={{
+            animation: 'slideInRight 0.3s ease-out forwards'
+          }}
+        >
+          <div
+            className="flex items-center space-x-3 px-4 py-3 rounded-lg shadow-lg"
+            style={{
+              backgroundColor: 'var(--success-color)',
+              color: 'white'
+            }}
+          >
+            <UserPlus size={20} />
+            <span className="font-medium">{newParticipantName} just joined!</span>
+          </div>
+        </div>
+      )}
+
+      {/* CSS for toast animation */}
+      <style>{`
+        @keyframes slideInRight {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        @keyframes participantEnter {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .participant-enter {
+          animation: participantEnter 0.3s ease-out forwards;
+        }
+      `}</style>
+
       {/* Header */}
-      <header className="bg-surface border-b border-border">
+      <header style={{ backgroundColor: 'var(--surface-color)', borderBottom: '1px solid var(--border-color)' }}>
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-center items-center h-16">
-            <h1 className="text-xl font-bold text-primary">Join Training Session</h1>
+            {organization?.branding?.logoUrl ? (
+              <img
+                src={organization.branding.logoUrl}
+                alt={organization.name}
+                className="h-10 object-contain"
+              />
+            ) : (
+              <h1 className="text-xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                Join Training Session
+              </h1>
+            )}
           </div>
         </div>
       </header>
@@ -270,6 +396,40 @@ export const JoinSession: React.FC = () => {
                   />
                 </div>
 
+                {/* Avatar Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Choose Your Avatar
+                  </label>
+                  <div className="grid grid-cols-6 gap-2">
+                    {AVATAR_OPTIONS.map((avatar) => (
+                      <button
+                        key={avatar}
+                        onClick={() => {
+                          setSelectedAvatar(avatar)
+                          soundSystem.play('click')
+                        }}
+                        className={`w-10 h-10 text-xl rounded-lg transition-all ${
+                          selectedAvatar === avatar ? 'ring-2 ring-offset-2 scale-110' : 'hover:scale-105'
+                        }`}
+                        style={{
+                          backgroundColor: selectedAvatar === avatar
+                            ? 'var(--primary-light-color)'
+                            : 'var(--surface-color)',
+                          ringColor: 'var(--primary-color)',
+                          border: '1px solid',
+                          borderColor: selectedAvatar === avatar
+                            ? 'var(--primary-color)'
+                            : 'var(--border-color)'
+                        }}
+                        type="button"
+                      >
+                        {avatar}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {error && (
                   <div className="flex items-center space-x-2 text-sm" style={{ color: 'var(--error-color)' }}>
                     <AlertCircle size={16} />
@@ -309,15 +469,19 @@ export const JoinSession: React.FC = () => {
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {participants.map((participant) => (
+                  {participants.map((participant, index) => (
                     <div
                       key={participant.id}
-                      className="flex items-center justify-between p-3 rounded-lg"
-                      style={{ backgroundColor: 'var(--surface-color)' }}
+                      className="flex items-center justify-between p-3 rounded-lg participant-enter"
+                      style={{
+                        backgroundColor: 'var(--surface-color)',
+                        animationDelay: `${index * 50}ms`
+                      }}
                     >
                       <div className="flex items-center space-x-3">
+                        <span className="text-xl">{participant.avatar || '😀'}</span>
                         <div
-                          className="w-3 h-3 rounded-full"
+                          className="w-2 h-2 rounded-full animate-pulse"
                           style={{ backgroundColor: participant.isReady ? 'var(--success-color)' : 'var(--warning-color)' }}
                         />
                         <span className="font-medium">{participant.name}</span>

@@ -94,7 +94,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
   // Theme hook - all colors come from CSS variables
   const { styles, colors } = useGameTheme('spotDifference')
 
-  const { playSound, playSequence } = useGameSounds(true)
+  const { playSound, playSequence, playAmbientTension } = useGameSounds(true)
   const { applyEffect, triggerScreenEffect, animateScoreCounter } = useVisualEffects()
   const { processGameCompletion } = useAchievements()
 
@@ -115,7 +115,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
     playSequence([{ sound: 'ding', delay: 0 }, { sound: 'tick', delay: 100 }])
   }, [])
 
-  // Timer effect
+  // Timer effect with consistent tension buildup (matching Millionaire game)
   useEffect(() => {
     if (timeRemaining > 0 && !gameComplete) {
       const timer = setInterval(() => {
@@ -127,7 +127,13 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
             playSound('tension')
           }
           if (prev === 11) {
-            playSound('heartbeat')
+            // Start tension music and heartbeat at 10 seconds
+            playAmbientTension(10000)
+            playSound('tension')
+          }
+          if (prev <= 5 && prev > 1) {
+            // Final countdown beeps
+            playSound('timeWarning')
           }
           if (prev <= 1) {
             playSound('buzz')

@@ -15,7 +15,10 @@ interface GameDispatcherProps {
   }
   participantName: string
   onGameComplete: (score: number, additionalData?: any) => void
+  onKicked?: () => void
   sessionSettings?: GameSession['settings']
+  sessionId?: string
+  participantId?: string
 }
 
 // Sample data generators for each game type
@@ -310,7 +313,10 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
   gameData,
   participantName,
   onGameComplete,
-  sessionSettings: _sessionSettings
+  onKicked,
+  sessionSettings: _sessionSettings,
+  sessionId,
+  participantId
 }) => {
   const handleGameComplete = (score: number, additionalData?: any) => {
     onGameComplete(score, additionalData)
@@ -343,13 +349,16 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
         <BingoGame
           items={generateBingoItems(gameData.quiz)}
           cardSize={5}
-          onGameComplete={(score, completedLines, completedCard) =>
-            handleGameComplete(score, { completedLines, completedCard })
+          onGameComplete={(score, bingoGameState) =>
+            handleGameComplete(score, { gameState: bingoGameState, gameType: 'bingo' })
           }
+          onKicked={onKicked}
           participantName={participantName}
           participants={engagementParticipants}
           timeLimit={gameData.timeLimit || 900} // 15 minutes default
           winCondition="line"
+          sessionId={sessionId}
+          participantId={participantId}
         />
       )
 

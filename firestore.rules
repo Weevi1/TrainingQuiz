@@ -66,9 +66,10 @@ service cloud.firestore {
 
     // Development environment organizations
     match /dev-organizations/{orgId} {
-      // Platform admins can read/write all organizations
-      // Organization owners can read/write their organization
-      allow read, write: if isPlatformAdmin() || isOrgMember(orgId);
+      // Anyone can read organization (for branding/theming on participant pages)
+      // Only authenticated org members or platform admins can write
+      allow read: if true;
+      allow write: if isPlatformAdmin() || isOrgMember(orgId);
 
       // Organization-scoped users collection
       match /users/{userId} {
@@ -81,8 +82,9 @@ service cloud.firestore {
       }
 
       // Quizzes subcollection
+      // Public read allowed for participants to load quiz during session
       match /quizzes/{quizId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if true;
         allow write: if isOrgMember(orgId) && hasMinRole(orgId, 'TRAINER');
       }
 
@@ -124,7 +126,10 @@ service cloud.firestore {
 
     // Production environment organizations (same structure but no dev- prefix)
     match /organizations/{orgId} {
-      allow read, write: if isPlatformAdmin() || isOrgMember(orgId);
+      // Anyone can read organization (for branding/theming on participant pages)
+      // Only authenticated org members or platform admins can write
+      allow read: if true;
+      allow write: if isPlatformAdmin() || isOrgMember(orgId);
 
       // Organization-scoped users collection
       match /users/{userId} {
@@ -134,8 +139,9 @@ service cloud.firestore {
       }
 
       // Quizzes subcollection
+      // Public read allowed for participants to load quiz during session
       match /quizzes/{quizId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if true;
         allow write: if isOrgMember(orgId) && hasMinRole(orgId, 'TRAINER');
       }
 

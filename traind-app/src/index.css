@@ -317,6 +317,31 @@ body {
   }
 }
 
+/* Fade in animation for new elements */
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Count badge pop animation */
+@keyframes countPop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.3);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 /* Animation utility classes */
 .enhance-correct { animation: correct-glow 0.6s ease-out; }
 .enhance-wrong { animation: wrong-shake 0.5s ease-out; }
@@ -325,6 +350,8 @@ body {
 .enhance-celebration { animation: celebration-bounce 1s ease-in-out; }
 .enhance-achievement { animation: achievement-burst 0.5s ease-out; }
 .enhance-glow { animation: glow-effect 1s ease-in-out infinite; }
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+.animate-count-pop { animation: countPop 0.4s ease-out; }
 .enhance-highlight { animation: answer-highlight 0.5s ease-in-out infinite; }
 
 /* Gold sparkle animation - for ESI theme and gold accents */

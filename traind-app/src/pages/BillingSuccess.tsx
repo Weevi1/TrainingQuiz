@@ -1,68 +1,34 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { CheckCircle, ArrowRight, CreditCard, Users, Zap } from 'lucide-react'
+import { CheckCircle, ArrowRight, Users, Zap } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { BillingService } from '../lib/billing'
-import { LoadingSpinner } from '../components/LoadingSpinner'
+import { BillingService, PLAN_PRICING, type PlanType } from '../lib/billing'
 
+/**
+ * BillingSuccess page - Shown after Platform Admin activates a subscription
+ * This is NOT a Stripe success page - subscriptions are managed manually via invoices/EFT
+ */
 export const BillingSuccess: React.FC = () => {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { currentOrganization } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [subscriptionDetails, setSubscriptionDetails] = useState<any>(null)
 
-  const sessionId = searchParams.get('session_id')
+  // Get plan from URL params (set by Platform Admin when activating subscription)
+  const activatedPlan = searchParams.get('plan') as PlanType | null
 
   useEffect(() => {
-    if (!sessionId) {
+    // If no organization or no plan param, redirect to billing
+    if (!currentOrganization || !activatedPlan) {
       navigate('/billing')
-      return
     }
+  }, [currentOrganization, activatedPlan, navigate])
 
-    // In mock mode, we'll simulate loading the completed subscription
-    loadSubscriptionDetails()
-  }, [sessionId])
-
-  const loadSubscriptionDetails = async () => {
-    setLoading(true)
-    try {
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
-      // In mock mode, we'll use the current organization's subscription
-      if (currentOrganization?.subscription) {
-        const planName = currentOrganization.subscription.plan
-        const priceData = BillingService.getAllPrices().find(p =>
-          p.planName.toLowerCase() === planName
-        )
-
-        setSubscriptionDetails({
-          planName: planName.charAt(0).toUpperCase() + planName.slice(1),
-          amount: priceData?.amount || 0,
-          interval: 'month', // Default to monthly
-          features: priceData?.features || [],
-          modules: currentOrganization.subscription.modules,
-          limits: currentOrganization.subscription.limits
-        })
-      }
-    } catch (error) {
-      console.error('Error loading subscription details:', error)
-    } finally {
-      setLoading(false)
-    }
+  if (!currentOrganization || !activatedPlan) {
+    return null
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <LoadingSpinner size="lg" />
-          <p className="mt-4 text-text-secondary">Confirming your subscription...</p>
-        </div>
-      </div>
-    )
-  }
+  const planData = PLAN_PRICING[activatedPlan]
+  const subscription = currentOrganization.subscription
 
   return (
     <div className="min-h-screen bg-background">
@@ -76,7 +42,7 @@ export const BillingSuccess: React.FC = () => {
             <CheckCircle style={{ color: 'var(--success-color)' }} size={32} />
           </div>
           <h1 className="text-3xl font-bold text-primary mb-2">
-            Welcome to {subscriptionDetails?.planName} Plan!
+            Welcome to {planData?.name || activatedPlan} Plan!
           </h1>
           <p className="text-lg text-text-secondary">
             Your subscription has been activated successfully
@@ -90,25 +56,32 @@ export const BillingSuccess: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div>
               <h3 className="font-medium mb-2 flex items-center space-x-2">
-                <CreditCard size={16} />
+                <Zap size={16} />
                 <span>Plan Information</span>
               </h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Plan:</span>
-                  <span className="font-medium">{subscriptionDetails?.planName}</span>
+                  <span className="font-medium">{planData?.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Billing:</span>
+                  <span>Annual Cost:</span>
                   <span className="font-medium">
-                    {BillingService.formatAmount(subscriptionDetails?.amount || 0)}
-                    /{subscriptionDetails?.interval}
+                    {BillingService.formatZAR(planData?.priceZAR || 0)} / year
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Status:</span>
                   <span className="font-medium" style={{ color: 'var(--success-color)' }}>Active</span>
                 </div>
+                {subscription?.expiresAt && (
+                  <div className="flex justify-between">
+                    <span>Expires:</span>
+                    <span className="font-medium">
+                      {new Date(subscription.expiresAt).toLocaleDateString('en-ZA')}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -121,25 +94,25 @@ export const BillingSuccess: React.FC = () => {
                 <div className="flex justify-between">
                   <span>Participants:</span>
                   <span className="font-medium">
-                    {subscriptionDetails?.limits?.maxParticipants === -1
+                    {planData?.limits.maxParticipants === -1
                       ? 'Unlimited'
-                      : subscriptionDetails?.limits?.maxParticipants}
+                      : planData?.limits.maxParticipants}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Sessions:</span>
                   <span className="font-medium">
-                    {subscriptionDetails?.limits?.maxSessions === -1
+                    {planData?.limits.maxSessions === -1
                       ? 'Unlimited'
-                      : subscriptionDetails?.limits?.maxSessions}
+                      : planData?.limits.maxSessions}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Trainers:</span>
                   <span className="font-medium">
-                    {subscriptionDetails?.limits?.maxTrainers === -1
+                    {planData?.limits.maxTrainers === -1
                       ? 'Unlimited'
-                      : subscriptionDetails?.limits?.maxTrainers}
+                      : planData?.limits.maxTrainers}
                   </span>
                 </div>
               </div>
@@ -153,10 +126,12 @@ export const BillingSuccess: React.FC = () => {
               <span>Available Game Modules</span>
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {subscriptionDetails?.modules?.map((module: string) => (
+              {planData?.modules.map((module: string) => (
                 <div key={module} className="flex items-center space-x-2 text-sm">
                   <CheckCircle size={14} style={{ color: 'var(--success-color)' }} />
-                  <span className="capitalize">{module}</span>
+                  <span className="capitalize">
+                    {module === 'spotdifference' ? 'Document Detective' : module}
+                  </span>
                 </div>
               ))}
             </div>
@@ -166,7 +141,7 @@ export const BillingSuccess: React.FC = () => {
           <div>
             <h3 className="font-medium mb-3">Plan Features</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {subscriptionDetails?.features?.map((feature: string, index: number) => (
+              {planData?.features.map((feature: string, index: number) => (
                 <div key={index} className="flex items-start space-x-2 text-sm">
                   <CheckCircle size={14} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--success-color)' }} />
                   <span>{feature}</span>
@@ -245,7 +220,7 @@ export const BillingSuccess: React.FC = () => {
             onClick={() => navigate('/billing')}
             className="btn-secondary flex items-center justify-center space-x-2 flex-1"
           >
-            <span>Manage Billing</span>
+            <span>View Subscription</span>
           </button>
         </div>
 
@@ -256,20 +231,24 @@ export const BillingSuccess: React.FC = () => {
         >
           <h3 className="font-medium mb-2">Need Help Getting Started?</h3>
           <p className="text-sm text-text-secondary mb-4">
-            Our team is here to help you make the most of your new subscription
+            Our team is here to help you make the most of your subscription
           </p>
           <div className="flex flex-col sm:flex-row gap-2 justify-center">
-            <button className="text-primary hover:underline text-sm">
-              View Documentation
-            </button>
-            <span className="hidden sm:inline text-text-secondary">•</span>
-            <button className="text-primary hover:underline text-sm">
+            <a
+              href="mailto:support@trained.fifo.systems"
+              className="text-primary hover:underline text-sm"
+            >
               Contact Support
-            </button>
+            </a>
             <span className="hidden sm:inline text-text-secondary">•</span>
-            <button className="text-primary hover:underline text-sm">
-              Schedule Demo
-            </button>
+            <a
+              href="https://wa.me/27825254011"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline text-sm"
+            >
+              WhatsApp Us
+            </a>
           </div>
         </div>
       </div>

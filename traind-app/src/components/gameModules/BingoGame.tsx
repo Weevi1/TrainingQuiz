@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { CheckCircle, Star, Trophy, Grid, Zap, Volume2, VolumeX } from 'lucide-react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { CheckCircle, Star, Trophy, Grid, Zap } from 'lucide-react'
 import { LoadingSpinner } from '../LoadingSpinner'
 import { useGameSounds } from '../../lib/soundSystem'
 import { useVisualEffects } from '../../lib/visualEffects'
 import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
+import { SoundControl } from '../SoundControl'
 import { useGameTheme } from '../../hooks/useGameTheme'
+import { FirestoreService } from '../../lib/firestore'
 
 interface BingoItem {
   id: string
@@ -14,6 +16,21 @@ interface BingoItem {
   points?: number
 }
 
+// Rich game state passed to onGameComplete
+export interface BingoGameState {
+  gameType: 'bingo'
+  score: number
+  cellsMarked: number
+  totalCells: number
+  linesCompleted: number
+  fullCardAchieved: boolean
+  bestStreak: number
+  timeToFirstBingo: number | null
+  timeSpent: number
+  winCondition: string
+  gameWon: boolean
+  markedCellKeys: string[]
+}
 
 interface EngagementParticipant {
   id: string
@@ -27,11 +44,14 @@ interface EngagementParticipant {
 interface BingoGameProps {
   items: BingoItem[]
   cardSize?: 3 | 4 | 5
-  onGameComplete: (score: number, completedLines: number, completedCard: boolean) => void
+  onGameComplete: (score: number, bingoGameState: BingoGameState) => void
+  onKicked?: () => void
   participantName: string
   participants?: EngagementParticipant[]
   timeLimit?: number
   winCondition?: 'line' | 'full_card' | 'corners' | 'any_pattern'
+  sessionId?: string
+  participantId?: string
 }
 
 interface CellState {
@@ -56,24 +76,31 @@ const CELEBRATION_MESSAGES = [
   "Superb! That's a BINGO!"
 ]
 
+// Session recovery key
+const BINGO_RECOVERY_KEY = (sessionId: string, participantId: string) =>
+  `bingo_recovery_${sessionId}_${participantId}`
+const RECOVERY_TIMEOUT_MS = 2 * 60 * 60 * 1000 // 2 hours
+
 export const BingoGame: React.FC<BingoGameProps> = ({
   items,
   cardSize = 5,
   onGameComplete,
+  onKicked,
   participantName,
   participants = [],
   timeLimit,
-  winCondition = 'line'
+  winCondition = 'line',
+  sessionId,
+  participantId
 }) => {
   const [bingoCard, setBingoCard] = useState<CellState[][]>([])
   const [markedCells, setMarkedCells] = useState<Set<string>>(new Set())
-  const [completedLines, setCompletedLines] = useState<number[]>([])
+  const [completedLines, setCompletedLines] = useState<number>(0)
   const [gameWon, setGameWon] = useState(false)
   const [gameComplete, setGameComplete] = useState(false)
   const [score, setScore] = useState(0)
   const [streak, setStreak] = useState(0)
   const [timeRemaining, setTimeRemaining] = useState(timeLimit || 0)
-  const [soundEnabled, setSoundEnabled] = useState(true)
   const [lastMarkedCell, setLastMarkedCell] = useState<{row: number, col: number} | null>(null)
   const [celebrationMessage, setCelebrationMessage] = useState('')
 
@@ -81,10 +108,19 @@ export const BingoGame: React.FC<BingoGameProps> = ({
   const cardContainerRef = useRef<HTMLDivElement>(null)
   const cellRefs = useRef<(HTMLButtonElement | null)[][]>(Array(cardSize).fill(null).map(() => Array(cardSize).fill(null)))
 
+  // Tracking refs
+  const maxStreakRef = useRef(0)
+  const firstBingoTimeRef = useRef<number | null>(null)
+  const startTimeRef = useRef(Date.now())
+  const firestoreDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const recoveryDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const completedLinesRef = useRef(0)
+  const gameCompleteRef = useRef(false)
+
   // Theme hook - all colors come from CSS variables
   const { styles, colors } = useGameTheme('bingo')
 
-  const { playSound, playSequence } = useGameSounds(true)
+  const { playSound, playSequence, playAmbientTension } = useGameSounds(true)
   const { applyEffect, triggerScreenEffect, animateScoreCounter } = useVisualEffects()
   const { processGameCompletion } = useAchievements()
 
@@ -96,8 +132,57 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       )
     : [{ id: 'current', name: participantName, score, streak, answered: markedCells.size > 0, isCurrentUser: true }]
 
-  // Initialize bingo card
+  // Calculate rank from participants
+  const currentRank = (() => {
+    if (participants.length <= 1) return null
+    const sorted = [...participants].map(p =>
+      p.isCurrentUser ? { ...p, score } : p
+    ).sort((a, b) => b.score - a.score)
+    const idx = sorted.findIndex(p => p.isCurrentUser)
+    return idx >= 0 ? idx + 1 : null
+  })()
+
+  const totalCells = cardSize * cardSize
+
+  // Initialize bingo card (with session recovery)
   useEffect(() => {
+    // Try session recovery first
+    if (sessionId && participantId) {
+      const recoveryKey = BINGO_RECOVERY_KEY(sessionId, participantId)
+      const saved = localStorage.getItem(recoveryKey)
+      if (saved) {
+        try {
+          const recovery = JSON.parse(saved)
+          const age = Date.now() - recovery.timestamp
+          if (age < RECOVERY_TIMEOUT_MS && recovery.cardSize === cardSize) {
+            // Restore saved state
+            setBingoCard(recovery.bingoCard)
+            setMarkedCells(new Set(recovery.markedCellKeys))
+            setScore(recovery.score)
+            setStreak(recovery.streak)
+            maxStreakRef.current = recovery.bestStreak || 0
+            firstBingoTimeRef.current = recovery.firstBingoTime
+            startTimeRef.current = recovery.startTime || Date.now()
+            if (recovery.timeRemaining !== undefined && timeLimit) {
+              setTimeRemaining(recovery.timeRemaining)
+            }
+            if (recovery.completedLines !== undefined) {
+              setCompletedLines(recovery.completedLines)
+              completedLinesRef.current = recovery.completedLines
+            }
+            if (recovery.gameWon) {
+              setGameWon(true)
+            }
+            return
+          } else {
+            localStorage.removeItem(recoveryKey)
+          }
+        } catch {
+          localStorage.removeItem(recoveryKey)
+        }
+      }
+    }
+
     generateBingoCard()
   }, [items, cardSize])
 
@@ -105,9 +190,10 @@ export const BingoGame: React.FC<BingoGameProps> = ({
   useEffect(() => {
     playSound('gameStart')
     playSequence([{ sound: 'ding', delay: 0 }, { sound: 'tick', delay: 100 }])
+    startTimeRef.current = Date.now()
   }, [])
 
-  // Timer effect
+  // Timer effect - use trainer's timer when available, local fallback
   useEffect(() => {
     if (timeLimit && timeRemaining > 0 && !gameComplete) {
       const timer = setInterval(() => {
@@ -116,7 +202,11 @@ export const BingoGame: React.FC<BingoGameProps> = ({
             playSound('timeWarning')
           }
           if (prev === 11) {
+            playAmbientTension(10000)
             playSound('tension')
+          }
+          if (prev <= 5 && prev > 1) {
+            playSound('timeWarning')
           }
           if (prev <= 1) {
             playSound('buzz')
@@ -131,10 +221,63 @@ export const BingoGame: React.FC<BingoGameProps> = ({
     }
   }, [timeRemaining, gameComplete, timeLimit])
 
+  // Timer sync with trainer (authoritative source)
+  useEffect(() => {
+    if (!sessionId || gameCompleteRef.current) return
+
+    const unsubscribe = FirestoreService.subscribeToSession(
+      sessionId,
+      (updatedSession) => {
+        if (!updatedSession || gameCompleteRef.current) return
+
+        // Sync timer from trainer's broadcast
+        if (updatedSession.currentTimeRemaining !== undefined) {
+          setTimeRemaining(updatedSession.currentTimeRemaining)
+        }
+
+        // Check if session ended
+        if (updatedSession.status === 'completed' && !gameCompleteRef.current) {
+          endGame()
+        }
+      }
+    )
+
+    return () => unsubscribe()
+  }, [sessionId])
+
+  // Kick detection
+  useEffect(() => {
+    if (!sessionId || !participantId) return
+
+    const unsubscribe = FirestoreService.subscribeToParticipant(
+      sessionId,
+      participantId,
+      (exists) => {
+        if (!exists) {
+          // Clean up recovery data
+          localStorage.removeItem(BINGO_RECOVERY_KEY(sessionId, participantId))
+          onKicked?.()
+        }
+      }
+    )
+
+    return () => unsubscribe()
+  }, [sessionId, participantId, onKicked])
+
   // Check for wins after each mark
   useEffect(() => {
-    checkForWins()
+    if (bingoCard.length > 0) {
+      checkForWins()
+    }
   }, [markedCells])
+
+  // Cleanup debounce timers
+  useEffect(() => {
+    return () => {
+      if (firestoreDebounceRef.current) clearTimeout(firestoreDebounceRef.current)
+      if (recoveryDebounceRef.current) clearTimeout(recoveryDebounceRef.current)
+    }
+  }, [])
 
   const generateBingoCard = () => {
     const shuffledItems = [...items].sort(() => Math.random() - 0.5)
@@ -152,7 +295,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
         rowCells.push({
           row,
           col,
-          marked: isCenterFree, // Free space in center for 5x5
+          marked: isCenterFree,
           item: isCenterFree ? { id: 'free', text: 'FREE', category: 'free' } : shuffledItems[cellIndex] || null
         })
       }
@@ -166,6 +309,62 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       setMarkedCells(new Set([`${centerCell}-${centerCell}`]))
     }
   }
+
+  // Save session recovery data (debounced)
+  const saveRecoveryData = useCallback(() => {
+    if (!sessionId || !participantId || gameCompleteRef.current) return
+
+    if (recoveryDebounceRef.current) clearTimeout(recoveryDebounceRef.current)
+    recoveryDebounceRef.current = setTimeout(() => {
+      const recoveryKey = BINGO_RECOVERY_KEY(sessionId, participantId)
+      const data = {
+        bingoCard,
+        markedCellKeys: Array.from(markedCells),
+        score,
+        streak,
+        bestStreak: maxStreakRef.current,
+        firstBingoTime: firstBingoTimeRef.current,
+        startTime: startTimeRef.current,
+        timeRemaining,
+        completedLines: completedLinesRef.current,
+        gameWon,
+        cardSize,
+        timestamp: Date.now()
+      }
+      localStorage.setItem(recoveryKey, JSON.stringify(data))
+    }, 500)
+  }, [sessionId, participantId, bingoCard, markedCells, score, streak, timeRemaining, gameWon, cardSize])
+
+  // Persist game state to Firestore (debounced)
+  const persistGameState = useCallback(() => {
+    if (!sessionId || !participantId || gameCompleteRef.current) return
+
+    if (firestoreDebounceRef.current) clearTimeout(firestoreDebounceRef.current)
+    firestoreDebounceRef.current = setTimeout(() => {
+      const timeSpent = Math.round((Date.now() - startTimeRef.current) / 1000)
+      FirestoreService.updateParticipantGameState(
+        sessionId,
+        participantId,
+        {
+          currentQuestionIndex: 0,
+          score,
+          streak,
+          answers: [],
+          gameType: 'bingo',
+          cellsMarked: markedCells.size,
+          totalCells,
+          linesCompleted: completedLinesRef.current,
+          fullCardAchieved: markedCells.size === totalCells,
+          bestStreak: maxStreakRef.current,
+          timeSpent,
+          gameWon,
+          markedCellKeys: Array.from(markedCells),
+          timeToFirstBingo: firstBingoTimeRef.current,
+          winCondition
+        }
+      ).catch(err => console.error('Error persisting bingo state:', err))
+    }, 2000)
+  }, [sessionId, participantId, score, streak, markedCells, totalCells, gameWon, winCondition])
 
   const toggleCell = (row: number, col: number) => {
     if (gameComplete || !bingoCard[row] || !bingoCard[row][col]) return
@@ -194,10 +393,14 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       const newStreak = streak + 1
       setStreak(newStreak)
 
+      // Track best streak (only increases)
+      if (newStreak > maxStreakRef.current) {
+        maxStreakRef.current = newStreak
+      }
+
       const pointsEarned = cell.item?.points || 10
       setScore(prev => {
         const newScore = prev + pointsEarned
-        // Animate score counter
         if (scoreCounterRef.current) {
           animateScoreCounter(scoreCounterRef.current, prev, newScore)
         }
@@ -206,11 +409,9 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       setLastMarkedCell({ row, col })
 
       // Play sound and visual effects
-      if (soundEnabled) {
-        playSound('correct')
-        if (newStreak >= 5) {
-          playSound('streak')
-        }
+      playSound('correct')
+      if (newStreak >= 5) {
+        playSound('streak')
       }
 
       if (cellElement) {
@@ -239,23 +440,27 @@ export const BingoGame: React.FC<BingoGameProps> = ({
     )
 
     setBingoCard(updatedCard)
+
+    // Persist to Firestore and localStorage (debounced)
+    // Use setTimeout to ensure state is committed
+    setTimeout(() => {
+      persistGameState()
+      saveRecoveryData()
+    }, 0)
   }
 
   const checkForWins = () => {
     if (gameComplete) return
 
     const gridSize = cardSize
-    const lines: number[][] = []
+    let lineCount = 0
 
     // Check rows
     for (let row = 0; row < gridSize; row++) {
       const rowComplete = Array.from({ length: gridSize }, (_, col) =>
         markedCells.has(`${row}-${col}`)
       ).every(Boolean)
-
-      if (rowComplete) {
-        lines.push([row * gridSize + 0, row * gridSize + gridSize - 1])
-      }
+      if (rowComplete) lineCount++
     }
 
     // Check columns
@@ -263,31 +468,22 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       const colComplete = Array.from({ length: gridSize }, (_, row) =>
         markedCells.has(`${row}-${col}`)
       ).every(Boolean)
-
-      if (colComplete) {
-        lines.push([col, (gridSize - 1) * gridSize + col])
-      }
+      if (colComplete) lineCount++
     }
 
     // Check diagonals
     const diagonal1Complete = Array.from({ length: gridSize }, (_, i) =>
       markedCells.has(`${i}-${i}`)
     ).every(Boolean)
-
-    if (diagonal1Complete) {
-      lines.push([0, gridSize * gridSize - 1])
-    }
+    if (diagonal1Complete) lineCount++
 
     const diagonal2Complete = Array.from({ length: gridSize }, (_, i) =>
       markedCells.has(`${i}-${gridSize - 1 - i}`)
     ).every(Boolean)
-
-    if (diagonal2Complete) {
-      lines.push([gridSize - 1, (gridSize - 1) * gridSize])
-    }
+    if (diagonal2Complete) lineCount++
 
     // Check corners (for corner win condition)
-    const cornersComplete = winCondition === 'corners' && [
+    const cornersComplete = [
       markedCells.has('0-0'),
       markedCells.has(`0-${gridSize - 1}`),
       markedCells.has(`${gridSize - 1}-0`),
@@ -301,22 +497,29 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       ).every(Boolean)
     ).every(Boolean)
 
-    setCompletedLines(lines.map(() => lines.length - 1))
+    setCompletedLines(lineCount)
+    completedLinesRef.current = lineCount
 
     // Determine if game is won based on win condition
     let hasWon = false
-    if (winCondition === 'line' && lines.length > 0) {
+    if (winCondition === 'line' && lineCount > 0) {
       hasWon = true
     } else if (winCondition === 'full_card' && allCellsMarked) {
       hasWon = true
     } else if (winCondition === 'corners' && cornersComplete) {
       hasWon = true
-    } else if (winCondition === 'any_pattern' && (lines.length > 0 || cornersComplete)) {
+    } else if (winCondition === 'any_pattern' && (lineCount > 0 || cornersComplete)) {
       hasWon = true
     }
 
     if (hasWon && !gameWon) {
       setGameWon(true)
+
+      // Record time to first bingo
+      if (!firstBingoTimeRef.current) {
+        firstBingoTimeRef.current = Math.round((Date.now() - startTimeRef.current) / 1000)
+      }
+
       setCelebrationMessage(CELEBRATION_MESSAGES[Math.floor(Math.random() * CELEBRATION_MESSAGES.length)])
 
       // Enhanced celebration effects
@@ -330,40 +533,94 @@ export const BingoGame: React.FC<BingoGameProps> = ({
         applyEffect(cardContainerRef.current, 'glow-effect')
       }
 
-      // Continue playing even after first bingo (unless full card required)
-      if (winCondition === 'full_card' || winCondition === 'line') {
-        setTimeout(() => {
-          endGame()
-        }, 3000)
-      }
+      // End game after celebration
+      setTimeout(() => {
+        endGame()
+      }, 3000)
     }
   }
 
 
   const endGame = () => {
+    if (gameCompleteRef.current) return
+    gameCompleteRef.current = true
     setGameComplete(true)
 
     // Play game end sound
     playSound('gameEnd')
 
+    const timeSpent = Math.round((Date.now() - startTimeRef.current) / 1000)
+
     // Process achievements
     const gameStats = {
       score,
-      accuracy: (markedCells.size / (cardSize * cardSize)) * 100,
-      timeSpent: timeLimit ? (timeLimit - timeRemaining) : 0,
-      streak,
+      accuracy: (markedCells.size / totalCells) * 100,
+      timeSpent,
+      streak: maxStreakRef.current,
       questionsAnswered: markedCells.size,
       correctAnswers: markedCells.size,
       gameType: 'bingo',
       completedAt: new Date(),
-      perfectScore: gameWon && (winCondition === 'full_card' ? markedCells.size === cardSize * cardSize : true),
+      perfectScore: gameWon && (winCondition === 'full_card' ? markedCells.size === totalCells : true),
       speedBonus: timeLimit ? Math.max(0, timeRemaining * 5) : 0
     }
 
     processGameCompletion(gameStats)
 
+    // Build rich game state
+    const bingoGameState: BingoGameState = {
+      gameType: 'bingo',
+      score,
+      cellsMarked: markedCells.size,
+      totalCells,
+      linesCompleted: completedLinesRef.current,
+      fullCardAchieved: markedCells.size === totalCells,
+      bestStreak: maxStreakRef.current,
+      timeToFirstBingo: firstBingoTimeRef.current,
+      timeSpent,
+      winCondition,
+      gameWon,
+      markedCellKeys: Array.from(markedCells)
+    }
+
+    // Mark participant completed in Firestore
+    if (sessionId && participantId) {
+      FirestoreService.updateParticipantGameState(
+        sessionId,
+        participantId,
+        {
+          currentQuestionIndex: 0,
+          score,
+          streak: maxStreakRef.current,
+          completed: true,
+          answers: [],
+          gameType: 'bingo',
+          cellsMarked: markedCells.size,
+          totalCells,
+          linesCompleted: completedLinesRef.current,
+          fullCardAchieved: markedCells.size === totalCells,
+          bestStreak: maxStreakRef.current,
+          timeSpent,
+          gameWon,
+          markedCellKeys: Array.from(markedCells),
+          timeToFirstBingo: firstBingoTimeRef.current,
+          winCondition
+        }
+      ).catch(err => console.error('Error persisting final bingo state:', err))
+
+      FirestoreService.markParticipantCompleted(
+        sessionId,
+        participantId,
+        score,
+        timeSpent
+      ).catch(err => console.error('Error marking participant completed:', err))
+
+      // Clear recovery data
+      localStorage.removeItem(BINGO_RECOVERY_KEY(sessionId, participantId))
+    }
+
     setTimeout(() => {
-      onGameComplete(score, completedLines.length, markedCells.size === cardSize * cardSize)
+      onGameComplete(score, bingoGameState)
     }, 2000)
   }
 
@@ -389,49 +646,86 @@ export const BingoGame: React.FC<BingoGameProps> = ({
 
   if (gameComplete) {
     return (
-      <div style={styles.container} className="flex items-center justify-center">
-        <div className="text-center max-w-md mx-auto p-6">
-          <div
-            className="rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4"
-            style={{ backgroundColor: 'var(--bingo-win-highlight)' }}
-          >
-            <Trophy style={{ color: 'var(--text-on-primary-color)' }} size={32} />
+      <div
+        className="min-h-screen relative overflow-hidden flex items-center justify-center"
+        style={{
+          background: gameWon
+            ? 'linear-gradient(to bottom right, var(--primary-dark-color, #1e3a8a), var(--secondary-color, #1e40af), var(--celebration-color, #7c3aed))'
+            : 'linear-gradient(to bottom right, var(--primary-color), var(--secondary-color))'
+        }}
+      >
+        {/* Celebration backdrop */}
+        {gameWon && (
+          <>
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute top-10 left-10 w-32 h-32 rounded-full opacity-30 animate-pulse" style={{ backgroundColor: 'var(--accent-color, #fbbf24)' }} />
+              <div className="absolute top-20 right-20 w-24 h-24 rounded-full opacity-40 animate-pulse" style={{ backgroundColor: 'var(--success-color)', animationDelay: '0.5s' }} />
+              <div className="absolute bottom-20 left-20 w-28 h-28 rounded-full opacity-35 animate-pulse" style={{ backgroundColor: 'var(--primary-color)', animationDelay: '1s' }} />
+              <div className="absolute bottom-10 right-10 w-36 h-36 rounded-full opacity-25 animate-pulse" style={{ backgroundColor: 'var(--celebration-color, #ec4899)', animationDelay: '1.5s' }} />
+            </div>
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute top-20 left-1/2 text-4xl animate-bounce" style={{ animationDelay: '0.2s' }}>🎉</div>
+              <div className="absolute top-1/3 left-10 text-3xl animate-bounce" style={{ animationDelay: '0.8s' }}>🎯</div>
+              <div className="absolute bottom-1/4 right-10 text-4xl animate-bounce" style={{ animationDelay: '1.2s' }}>⭐</div>
+              <div className="absolute top-1/4 right-1/4 text-2xl animate-bounce" style={{ animationDelay: '1.8s' }}>🎊</div>
+            </div>
+          </>
+        )}
+
+        <div
+          className="p-8 rounded-3xl shadow-2xl max-w-md w-full mx-4 text-center relative border-2"
+          style={{ backgroundColor: 'rgba(255,255,255,0.95)', borderColor: gameWon ? 'var(--accent-color, #fbbf24)' : 'var(--primary-color)' }}
+        >
+          <div className="mb-6">
+            <div
+              className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg"
+              style={{
+                background: gameWon
+                  ? 'linear-gradient(135deg, var(--accent-color, #fbbf24), var(--celebration-color, #f59e0b))'
+                  : 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))',
+                border: gameWon ? '4px solid var(--accent-color, #fbbf24)' : '4px solid var(--primary-color)'
+              }}
+            >
+              <Trophy style={{ color: 'white' }} size={36} />
+            </div>
+            <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-color)' }}>
+              {gameWon ? 'BINGO ACHIEVED!' : 'Game Complete!'}
+            </h1>
+            <p style={{ color: 'var(--text-secondary-color)' }}>
+              Great job playing Training Bingo!
+            </p>
           </div>
-          <h1 className="text-3xl font-bold mb-2">
-            {gameWon ? 'BINGO ACHIEVED!' : 'Game Complete!'}
-          </h1>
-          <p className="mb-6" style={{ color: 'var(--text-secondary-color)' }}>
-            Great job playing Training Bingo!
-          </p>
 
           <div
-            className="rounded-lg p-4 mb-4"
+            className="rounded-xl p-4 mb-6"
             style={{ backgroundColor: 'var(--surface-color)' }}
           >
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <div className="font-bold">{score}</div>
-                <div>Total Score</div>
+            <div className="grid grid-cols-2 gap-4 text-center">
+              <div className="p-3 rounded-lg" style={{ backgroundColor: 'var(--primary-light-color)' }}>
+                <div className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>{score}</div>
+                <div className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>Total Score</div>
               </div>
-              <div>
-                <div className="font-bold">{completedLines.length}</div>
-                <div>Lines Completed</div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: 'var(--success-light-color)' }}>
+                <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>{completedLinesRef.current}</div>
+                <div className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>Lines</div>
               </div>
-              <div>
-                <div className="font-bold">{markedCells.size}</div>
-                <div>Squares Marked</div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: 'rgba(249, 115, 22, 0.15)' }}>
+                <div className="text-2xl font-bold" style={{ color: 'var(--streak-color, #f97316)' }}>{markedCells.size}/{totalCells}</div>
+                <div className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>Cells Marked</div>
               </div>
-              <div>
-                <div className="font-bold">{streak}</div>
-                <div>Best Streak</div>
+              <div className="p-3 rounded-lg" style={{ backgroundColor: 'var(--warning-light-color)' }}>
+                <div className="text-2xl font-bold" style={{ color: 'var(--warning-color)' }}>{maxStreakRef.current} 🔥</div>
+                <div className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>Best Streak</div>
               </div>
             </div>
           </div>
 
-          <LoadingSpinner size="sm" />
-          <p className="text-sm mt-2" style={{ color: 'var(--text-secondary-color)' }}>
-            Preparing your results...
-          </p>
+          <div className="flex items-center justify-center gap-2">
+            <LoadingSpinner size="sm" />
+            <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
+              Preparing your results...
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -445,20 +739,31 @@ export const BingoGame: React.FC<BingoGameProps> = ({
           <div className="flex justify-between items-center h-16">
             <div className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
               {participantName}
+              {currentRank && (
+                <span
+                  className="ml-2 px-2 py-0.5 rounded text-xs font-bold"
+                  style={{
+                    backgroundColor: currentRank <= 3 ? 'var(--gold-color, #fbbf24)' : 'rgba(255,255,255,0.2)',
+                    color: currentRank <= 3 ? '#000' : 'var(--text-on-primary-color, white)'
+                  }}
+                >
+                  #{currentRank}
+                </span>
+              )}
             </div>
             <div className="text-xl font-bold" style={styles.accentText}>
               TRAINING BINGO
             </div>
             <div className="flex items-center space-x-4">
-              <button
-                onClick={() => setSoundEnabled(!soundEnabled)}
-                className="p-2 transition-colors"
-                style={{ color: 'var(--text-secondary-color)' }}
-              >
-                {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-              </button>
               {timeLimit && (
-                <div className="flex items-center space-x-1" style={styles.accentText}>
+                <div
+                  className={`flex items-center space-x-1 px-2 py-1 rounded ${timeRemaining <= 30 ? 'animate-pulse' : ''}`}
+                  style={{
+                    backgroundColor: timeRemaining <= 30 ? 'var(--error-color)' : 'transparent',
+                    color: timeRemaining <= 30 ? 'white' : undefined,
+                    ...(timeRemaining > 30 ? styles.accentText : {})
+                  }}
+                >
                   <span className="font-mono">{Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}</span>
                 </div>
               )}
@@ -487,7 +792,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>
-                  {completedLines.length}
+                  {completedLines}
                 </div>
                 <div className="text-sm">Lines</div>
               </div>
@@ -496,6 +801,12 @@ export const BingoGame: React.FC<BingoGameProps> = ({
                   {streak}
                 </div>
                 <div className="text-sm">Streak</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-bold" style={{ color: 'var(--text-secondary-color)' }}>
+                  {markedCells.size}/{totalCells}
+                </div>
+                <div className="text-xs">Marked</div>
               </div>
             </div>
             <div className="text-right">
@@ -554,11 +865,15 @@ export const BingoGame: React.FC<BingoGameProps> = ({
                   onClick={() => toggleCell(cell.row, cell.col)}
                   disabled={gameComplete || isFree}
                   className={`
-                    aspect-square p-2 text-xs font-medium transition-all duration-300
+                    aspect-square p-2 text-sm font-medium transition-all duration-300
                     flex items-center justify-center text-center leading-tight touch-feedback
+                    min-h-[48px]
                     ${isLastMarked ? 'animate-pulse' : ''}
                   `}
-                  style={getCellStyle(cell)}
+                  style={{
+                    ...getCellStyle(cell),
+                    WebkitTapHighlightColor: 'transparent'
+                  }}
                 >
                   <div className="relative w-full h-full flex items-center justify-center">
                     {isMarked && !isFree && (
@@ -604,17 +919,19 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       {/* Live Engagement Component */}
       <LiveEngagement
         participants={engagementParticipants}
-        currentQuestion={1} // Bingo is ongoing, not question-based
+        currentQuestion={1}
         totalQuestions={1}
-        showProgress={false} // Don't show question progress for Bingo
+        showProgress={false}
         showLeaderboard={true}
         showParticipantCount={true}
-        showAnswerProgress={false} // Not applicable for Bingo
+        showAnswerProgress={false}
         onReaction={(reaction) => {
           playSound('click')
-          console.log('Player reacted with:', reaction)
         }}
       />
+
+      {/* Floating Sound Control */}
+      <SoundControl position="bottom-right" minimal={true} />
     </div>
   )
 }

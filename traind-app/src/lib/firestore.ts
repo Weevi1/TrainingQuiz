@@ -113,7 +113,7 @@ export type GameSession = {
   gameType: 'quiz' | 'millionaire' | 'bingo' | 'speedround' | 'spotdifference'
   title: string
   code: string
-  status: 'waiting' | 'active' | 'completed'
+  status: 'waiting' | 'countdown' | 'active' | 'completed'
   trainerId: string
   participantLimit: number
   currentParticipants: number
@@ -124,6 +124,10 @@ export type GameSession = {
     enableSounds: boolean
     recordSession: boolean
   }
+  // Timer broadcaster fields (trainer is authoritative)
+  currentTimeRemaining?: number
+  currentQuestionIndex?: number
+  lastTimerUpdate?: Date
   startTime?: Date
   endTime?: Date
   createdAt: Date
@@ -167,10 +171,16 @@ export type Participant = {
   sessionId: string
   joinedAt: Date
   isReady: boolean
+  avatar?: string
+  completed?: boolean
+  completedAt?: Date
+  finalScore?: number
+  totalTime?: number
   gameState?: {
     currentQuestionIndex: number
     score: number
     streak: number
+    completed?: boolean
     answers: Array<{
       questionId: string
       selectedAnswer: number
@@ -178,6 +188,18 @@ export type Participant = {
       timeSpent: number
       confidence?: number
     }>
+    // Bingo-specific fields
+    gameType?: 'quiz' | 'bingo'
+    cellsMarked?: number
+    totalCells?: number
+    linesCompleted?: number
+    fullCardAchieved?: boolean
+    bestStreak?: number
+    timeSpent?: number
+    gameWon?: boolean
+    markedCellKeys?: string[]
+    timeToFirstBingo?: number | null
+    winCondition?: string
   }
 }
 
@@ -533,12 +555,13 @@ export class FirestoreService {
   }
 
   // Participant operations
-  static async addParticipantToSession(sessionId: string, participantName: string): Promise<string> {
+  static async addParticipantToSession(sessionId: string, participantName: string, avatar?: string): Promise<string> {
     const participantData: Partial<Participant> = {
       name: participantName,
       sessionId,
       joinedAt: serverTimestamp() as any,
       isReady: true,
+      avatar: avatar || '😀',
       gameState: {
         currentQuestionIndex: 0,
         score: 0,
@@ -626,6 +649,126 @@ export class FirestoreService {
         joinedAt: doc.data().joinedAt?.toDate()
       })) as Participant[]
       callback(participants)
+    })
+  }
+
+  // Remove participant (kick functionality)
+  static async removeParticipant(sessionId: string, participantId: string): Promise<void> {
+    await deleteDoc(doc(db, getCollectionName('sessions'), sessionId, 'participants', participantId))
+
+    // Update session participant count
+    const sessionDoc = await getDoc(getSessionDoc(sessionId))
+    if (sessionDoc.exists()) {
+      const currentCount = sessionDoc.data().currentParticipants || 0
+      await updateDoc(getSessionDoc(sessionId), {
+        currentParticipants: Math.max(0, currentCount - 1)
+      })
+    }
+  }
+
+  // Subscribe to a specific participant (for kick detection)
+  static subscribeToParticipant(
+    sessionId: string,
+    participantId: string,
+    callback: (exists: boolean, participant?: Participant) => void
+  ): () => void {
+    const participantRef = doc(db, getCollectionName('sessions'), sessionId, 'participants', participantId)
+
+    return onSnapshot(participantRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        callback(true, {
+          id: docSnapshot.id,
+          ...docSnapshot.data(),
+          joinedAt: docSnapshot.data().joinedAt?.toDate()
+        } as Participant)
+      } else {
+        callback(false)
+      }
+    })
+  }
+
+  // Update session timer (broadcaster pattern - trainer is authoritative)
+  static async updateSessionTimer(
+    sessionId: string,
+    currentTimeRemaining: number,
+    currentQuestionIndex: number
+  ): Promise<void> {
+    await updateDoc(getSessionDoc(sessionId), {
+      currentTimeRemaining,
+      currentQuestionIndex,
+      lastTimerUpdate: serverTimestamp()
+    })
+  }
+
+  // Submit individual answer
+  static async submitAnswer(
+    sessionId: string,
+    participantId: string,
+    answerData: {
+      questionId: string
+      questionIndex: number
+      selectedAnswer: number
+      isCorrect: boolean
+      timeSpent: number
+      participantName: string
+    }
+  ): Promise<string> {
+    const answerRef = await addDoc(getSessionSubcollection(sessionId, 'answers'), {
+      ...answerData,
+      participantId,
+      answeredAt: serverTimestamp()
+    })
+    return answerRef.id
+  }
+
+  // Get all answers for a session
+  static async getSessionAnswers(sessionId: string): Promise<any[]> {
+    const answersQuery = query(
+      getSessionSubcollection(sessionId, 'answers'),
+      orderBy('answeredAt', 'asc')
+    )
+
+    const snapshot = await getDocs(answersQuery)
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      answeredAt: doc.data().answeredAt?.toDate()
+    }))
+  }
+
+  // Subscribe to session answers (for live tracking)
+  static subscribeToSessionAnswers(
+    sessionId: string,
+    callback: (answers: any[]) => void
+  ): () => void {
+    const answersQuery = query(
+      getSessionSubcollection(sessionId, 'answers'),
+      orderBy('answeredAt', 'asc')
+    )
+
+    return onSnapshot(answersQuery, (snapshot) => {
+      const answers = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        answeredAt: doc.data().answeredAt?.toDate()
+      }))
+      callback(answers)
+    })
+  }
+
+  // Mark participant as completed
+  static async markParticipantCompleted(
+    sessionId: string,
+    participantId: string,
+    finalScore: number,
+    totalTime: number
+  ): Promise<void> {
+    await updateDoc(doc(db, getCollectionName('sessions'), sessionId, 'participants', participantId), {
+      completed: true,
+      completedAt: serverTimestamp(),
+      finalScore,
+      totalTime,
+      'gameState.completed': true
     })
   }
 

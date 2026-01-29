@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Play, Users, Clock, BarChart, Plus, Eye, Trash2, QrCode } from 'lucide-react'
+import { Play, Users, Clock, BarChart, Plus, Eye, Trash2, QrCode, ArrowLeft } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { FirestoreService, type GameSession } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
@@ -103,6 +103,12 @@ export const SessionManagement: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-4">
+              <button
+                onClick={() => navigate('/dashboard')}
+                className="p-2 text-text-secondary hover:text-primary transition-colors"
+              >
+                <ArrowLeft size={20} />
+              </button>
               <h1 className="text-xl font-bold text-primary">Session Management</h1>
             </div>
             <button

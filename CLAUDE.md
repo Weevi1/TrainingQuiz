@@ -11,6 +11,45 @@
 
 ## Current Status: Production Ready ✅
 
+### ✅ COMPLETED: Participant Theming & Permissions Fix (January 28, 2025)
+
+**Critical Fixes for Participant Experience:**
+
+1. **Participant Theming Now Works**
+   - Created `src/lib/applyBranding.ts` - Standalone branding utility for participant pages (no auth context required)
+   - Supports full theme preset system with 30+ CSS variables
+   - Properly loads colors, typography, backgrounds, game themes from organization's `themePreset` field
+   - Updated `JoinSession.tsx`, `PlaySession.tsx`, `ParticipantResults.tsx` to use new utility
+
+2. **Firestore Rules Updated for Unauthenticated Participants**
+   - Organizations: `allow read: if true` - Participants can load branding
+   - Quizzes: `allow read: if true` - Participants can load quiz questions
+   - Sessions & subcollections were already public
+
+3. **Avatar/Emoji Display Fixed**
+   - `SessionControl.tsx` now shows participant's chosen emoji avatar instead of index number
+   - Avatars display in both waiting room and active session participant lists
+
+**Files Created:**
+- `traind-app/src/lib/applyBranding.ts` - Full theme preset branding for participant pages
+
+**Files Modified:**
+- `traind-app/src/pages/JoinSession.tsx` - Uses applyBranding utility
+- `traind-app/src/pages/PlaySession.tsx` - Uses applyBranding utility
+- `traind-app/src/pages/ParticipantResults.tsx` - Uses applyBranding utility
+- `traind-app/src/pages/SessionControl.tsx` - Shows avatar emoji instead of number
+- `firestore.rules` - Public read for organizations and quizzes
+
+**Participant Flow Now Complete:**
+1. Scan QR → Join page loads with organization theme ✅
+2. Choose avatar/emoji, enter name → Join session ✅
+3. Avatar shows on trainer's screen ✅
+4. Countdown (3-2-1-GO!) → Quiz starts ✅
+5. Answer questions with themed UI ✅
+6. Results page with leaderboard, achievements, certificate ✅
+
+---
+
 ### ✅ COMPLETED: Session Flow Fixes (January 27, 2025)
 
 **Critical Bug Fixes:**
@@ -22,14 +61,18 @@
 1. Dashboard → "Start a Session" → Modal opens with quiz list
 2. Select quiz → Click "Start Session"
 3. Session created → Navigate to `/session/{sessionId}` (waiting room with QR code)
-4. Participants scan QR or enter code at `/join`
-5. Trainer clicks "Start Quiz" → Quiz runs
-6. Complete → Results
+4. Participants scan QR or enter code at `/join` (with organization branding)
+5. Participant enters name → Joins waiting room (themed, shows participant count)
+6. Trainer clicks "Start Quiz" → Quiz runs (A/B/C/D labels, feedback overlays, timer sync)
+7. Complete → Celebratory Results page (gradient background, achievements, question review)
 
 **Files Modified:**
 - `traind-app/src/lib/firestore.ts` - Fixed `findSessionByCode()` query
 - `traind-app/src/pages/QuizManagement.tsx` - Fixed "Start Session" button
 - `traind-app/src/pages/Dashboard.tsx` - Added quick session modal
+- `traind-app/src/pages/JoinSession.tsx` - Added organization branding loading
+- `traind-app/src/pages/PlaySession.tsx` - Added waiting room, quiz UI with A/B/C/D labels, feedback overlays, organization theming
+- `traind-app/src/pages/ParticipantResults.tsx` - Complete visual overhaul with celebration effects
 
 **Reference Implementation:**
 The session flow is based on `/home/aiguy/projects/gb-training-app/frontend/` which is the working GB Attorneys training app (v1). Key reference files:
@@ -109,7 +152,26 @@ cd frontend && npm run dev
 # Database setup
 # Firebase Firestore rules configured in firestore.rules
 # Firebase Firestore indexes configured in firestore.indexes.json
+
+# Deploy Firestore rules
+firebase deploy --only firestore:rules
 ```
+
+## Helper Scripts
+Located in `traind-app/scripts/`:
+
+```bash
+# Create a demo quiz in the ESI organization (requires service-account.json)
+node scripts/create-demo-quiz-admin.mjs
+
+# Check ESI organization branding configuration
+node scripts/check-esi-branding.mjs
+
+# Check session and organization data relationships
+node scripts/check-session-org.mjs
+```
+
+**Note:** These scripts use Firebase Admin SDK and require `service-account.json` in the project root.
 
 ## Project Structure
 ```
@@ -301,9 +363,9 @@ Successfully completed Phase 4 with comprehensive game module enhancements, soun
 - ✅ **PlatformAdmin**: Super admin interface for organization management
 
 **Participant Interface:**
-- ✅ **JoinSession**: Mobile-optimized session joining with QR code support
-- ✅ **PlaySession**: Interactive quiz gameplay with real-time synchronization
-- ✅ **ParticipantResults**: Comprehensive results with achievements and analytics
+- ✅ **JoinSession**: Mobile-optimized session joining with QR code support and organization branding
+- ✅ **PlaySession**: Interactive quiz gameplay with real-time synchronization, waiting room state, A/B/C/D answer labels, full-screen feedback overlays, and organization theming
+- ✅ **ParticipantResults**: Celebratory results page with gradient backgrounds, floating emojis, achievement badges, collapsible question breakdown, and full organization theming
 
 **Real-time Features:**
 - ✅ **Live Participant Tracking**: Real-time participant list updates
@@ -361,6 +423,9 @@ The Phase 1 foundation is fully functional and ready for Phase 2 development:
 - ✅ **Complete tenant theming system with 9 presets and custom color support**
 - ✅ **White-label ready - all UI components use CSS variables**
 - ✅ **Theme editor UI with live preview for organization customization**
+- ✅ **Polished participant mobile experience** (join → waiting room → quiz with A/B/C/D labels → celebratory results)
+- ✅ **Organization branding throughout participant journey** (JoinSession, PlaySession, ParticipantResults)
+- ✅ **Celebratory results page** with gradient backgrounds, floating emojis, achievement badges
 
 ## 🚀 Phase 5 Ready - Business Features & Production Polish
 
@@ -381,7 +446,11 @@ All enhanced gaming features are now working perfectly:
 ### **Immediate Next Steps - Phase 5 (Weeks 29-36)**
 
 **Ready to Implement:**
-1. **Billing Integration** - Stripe subscription management with plan upgrades ⭐ **NEXT**
+1. **Billing Integration** - Invoice & direct payment system (Stripe not available in South Africa) ⭐ **NEXT**
+   - Manual invoice generation for organizations
+   - EFT/bank transfer payment tracking
+   - Subscription status management in Firestore
+   - Payment confirmation workflow for Platform Admin
 2. **Additional Game Modules**:
    - Training Jeopardy with categories and wagering
    - Escape Room Training with collaborative puzzles
@@ -395,7 +464,7 @@ All enhanced gaming features are now working perfectly:
 5. **White-label Enhancements** - Advanced customization options
 
 **Phase 5 Goals:**
-- Complete business model with subscription billing
+- Complete business model with invoice-based billing (manual payment verification)
 - Add final game modules for higher-tier plans
 - Optimize for production scalability and performance
 - ✅ ~~Enhance white-label customization capabilities~~ (COMPLETED)
@@ -407,9 +476,10 @@ All enhanced gaming features are now working perfectly:
 - 🎵 **Sound & Visual Systems**: 100% Complete
 - 🏆 **Achievement & Engagement**: 100% Complete
 - 🎨 **Tenant Theming**: 100% Complete (Full CSS variable theming, 9 presets, theme editor)
-- 💳 **Billing**: 0% - Ready to implement
+- 📱 **Participant Mobile Experience**: 100% Complete (Join → Wait → Play → Results with full theming)
+- 💳 **Billing**: 0% - Ready to implement (Invoice/EFT system - no Stripe in SA)
 - 🎲 **Additional Modules**: 50% - 4 of 7 planned modules complete
-- 🚀 **Production Ready**: 95% - Core functionality, enhanced UX, and white-label theming complete
+- 🚀 **Production Ready**: 98% - Full participant journey polished with celebration effects
 
 ### Reference - Live Application
 **🌐 Trained Platform**: https://traind-platform.web.app (custom domain: trained.fifo.systems)
@@ -435,6 +505,44 @@ All enhanced gaming features are now working perfectly:
    ```
 
 ### Recent Major Updates
+
+**Billing System Update - Stripe Removed (January 28, 2025):**
+- ✅ **Stripe Unavailable in South Africa**: Entire codebase updated to use manual invoicing/EFT
+- ✅ **Files Updated**:
+  - `CLAUDE.md` - Updated billing roadmap and status
+  - `.env` and `.env.example` - Removed Stripe keys
+  - `traind-app/.env` - Removed Stripe keys
+  - `traind-app/src/pages/BillingSuccess.tsx` - Rewrote for manual billing (was broken)
+  - `traind-app/src/lib/billing.ts` - Already correct (manual billing service)
+  - `docs/DEVELOPMENT_ROADMAP.md` - 6 Stripe references updated
+  - `docs/ARCHITECTURE.md` - Schema and cloud functions updated
+- ✅ **Billing Model**: Annual subscriptions in ZAR
+  - Basic: R5,000/year
+  - Professional: R14,000/year
+  - Enterprise: R35,000/year
+- ✅ **Payment Flow**: Invoice generation → EFT payment → Platform Admin confirms → Subscription activated
+
+**Participant Experience Polish (January 28, 2025):**
+- ✅ **Celebratory Results Page**: Complete visual overhaul of ParticipantResults.tsx
+  - Full gradient background using organization theme colors
+  - Floating celebration emojis (🎉⭐🎊✨) for scores 80%+
+  - Large score circle with gradient styling and gold border
+  - Performance badges with emojis (🏆🌟👍📚💪) based on score level
+- ✅ **Enhanced Achievements Display**: Cards with emoji icons and descriptions
+  - 🏆 Perfect Score, 🔥 Streak Master, ⚡ Speed Demon, 🎯 Knowledge Expert, ✅ Certified
+  - Colored borders matching achievement type
+- ✅ **Mobile-Optimized Question Breakdown**: Collapsible `<details>` element
+  - Visual emojis (✅❌) for correct/incorrect
+  - 💡 highlighted explanations
+- ✅ **Performance Insights Cards**: Styled cards with large emojis and colored backgrounds
+  - 👑 Crown indicator for 90%+ scores
+- ✅ **Data Flow Fix**: PlaySession now passes complete `gameState` and `quiz` data to results
+  - Organization ID passed for proper theming on results page
+  - Full answer history for question-by-question review
+
+**Files Modified:**
+- `traind-app/src/pages/ParticipantResults.tsx` - Complete visual overhaul
+- `traind-app/src/pages/PlaySession.tsx` - Updated data passing to results
 
 **Rich Tenant Theming System (January 27, 2025):**
 - ✅ **Complete CSS Variable Theming**: All 46+ component files converted to use CSS variables
@@ -517,7 +625,7 @@ A team of specialized agents analyzed the existing TrainingQuiz codebase and des
 - ✅ Multi-tenant database restructuring for organization isolation
 - ✅ Enhanced authentication system for Super Admin, Trainer, and Participant roles
 - ✅ Dynamic theming system for white-label branding
-- 🔄 Subscription management with Stripe integration
+- 🔄 Subscription management with invoice/direct payment system (Stripe unavailable in SA)
 - 🔄 Module marketplace for feature purchasing
 
 ### SaaS Architecture Design
@@ -678,3 +786,57 @@ organizations/
 - See `docs/ARCHITECTURE.md` for detailed technical specifications
 - See `docs/GAME_MODULES.md` for comprehensive game design documentation
 - See `docs/DEVELOPMENT_ROADMAP.md` for detailed timeline and milestones
+---
+
+## FIFO Ops Integration
+
+This project reports to **FIFO Ops** (ops.fifo.systems) for centralized task and context tracking across all FIFO Solutions projects.
+
+### Reading from Ops
+At session start, check `/home/aiguy/projects/fifo-ops/FIFO_OPS_STATE.md` for current business priorities and cross-project context.
+
+### Writing to Ops
+When working in this project, if you identify:
+- Tasks that should be tracked in the central Ops dashboard
+- Issues requiring Riaan's attention across projects
+- Cross-project dependencies or blockers
+- Important decisions or context other projects should know about
+
+**Add them to the Outbox section below.** FIFO Ops will process these during its sync.
+
+---
+
+## Inbox from FIFO Ops
+> Last updated: 2026-01-29
+
+### Active Tasks for This Project
+- [CRITICAL] Set up ESI Law as a new tenant with their own branding. This is a first look for the client — the tenant needs to be presentation-ready before the demo.
+
+### Decisions (from Ops)
+- **ESI Law is a paying client**: They are ready to pay. This is one of 3 priority clients for this week.
+- **Riaan noted** (28 Jan) he's "not confident in the app yet" and wants more testing — but ESI Law is keen, so the tenant setup and a thorough test pass should address both.
+
+### Client Context
+- **ESI Law**: Law firm wanting the Trained platform with their own branding. First look — no demo done yet, no formal meeting booked. Ongoing WhatsApp conversation. Need to create their tenant via Platform Admin with appropriate legal-professional branding, then test the full participant flow end-to-end.
+
+### What to work on
+1. Create ESI Law tenant via Platform Admin (or admin script) with legal-professional theme preset
+2. Test full session flow: create quiz → generate QR → join as participant → play → results
+3. Verify branding renders correctly on all participant-facing pages
+4. Flag any issues to Ops via outbox
+
+---
+
+## Outbox for FIFO Ops
+
+<!-- 
+Add notes for FIFO Ops here. Format:
+- [DATE] [PROJECT: trained] [PRIORITY: low/medium/high] Description
+
+Example:
+- [2026-01-28] [PROJECT: trained] [PRIORITY: medium] Billing integration blocked - need SA payment gateway
+- [2026-01-28] [PROJECT: trained] [PRIORITY: low] Consider adding dark mode
+
+Items will be processed and removed by FIFO Ops sync.
+-->
+

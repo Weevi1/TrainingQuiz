@@ -1,5 +1,6 @@
 // Comprehensive sound system for training games
 // Uses Web Audio API for dynamic sound generation and playback
+// Inspired by v1 gameShowSounds with auto-initialization and grouped volumes
 
 export type SoundType =
   | 'correct'
@@ -18,23 +19,55 @@ export type SoundType =
   | 'timeWarning'
   | 'gameStart'
   | 'gameEnd'
+  | 'participantJoin'
+
+// Grouped volume levels for consistent UX (learned from v1)
+const volumeLevels = {
+  feedback: 0.25,      // Correct/Wrong answers - moderate volume
+  selection: 0.15,     // UI interactions - subtle
+  celebration: 0.35,   // Victory/celebrations - slightly louder
+  timer: 0.2,          // Clock ticking - background level
+  fanfare: 0.4,        // Show start/complete - prominent
+  notification: 0.3,   // Participant join, etc.
+}
 
 class GameSoundSystem {
   private audioContext: AudioContext | null = null
   private masterGain: GainNode | null = null
   private isEnabled = true
   private volume = 0.7
+  private initialized = false
 
   constructor() {
-    this.initialize()
+    // Set up auto-initialization on first user interaction (browser autoplay policy)
+    this.setupAutoInit()
+  }
+
+  private setupAutoInit() {
+    const initOnInteraction = () => {
+      if (!this.initialized) {
+        this.initialize()
+      }
+    }
+
+    // Initialize on first user interaction (required by browser autoplay policies)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('click', initOnInteraction, { once: true })
+      document.addEventListener('touchstart', initOnInteraction, { once: true })
+      document.addEventListener('keydown', initOnInteraction, { once: true })
+    }
   }
 
   private async initialize() {
+    if (this.initialized) return
+
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
       this.masterGain = this.audioContext.createGain()
       this.masterGain.connect(this.audioContext.destination)
       this.masterGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime)
+      this.initialized = true
+      console.log('🎵 Sound system initialized!')
     } catch (error) {
       console.warn('Audio not supported:', error)
       this.audioContext = null
@@ -53,6 +86,11 @@ class GameSoundSystem {
   }
 
   async play(soundType: SoundType) {
+    // Auto-initialize if not done yet
+    if (!this.initialized) {
+      await this.initialize()
+    }
+
     if (!this.isEnabled || !this.audioContext || !this.masterGain) return
 
     // Resume audio context if suspended (browser autoplay policy)
@@ -133,6 +171,10 @@ class GameSoundSystem {
 
       case 'gameEnd':
         this.playGameEndSound(oscillator, gainNode, filterNode, now)
+        break
+
+      case 'participantJoin':
+        this.playParticipantJoinSound(oscillator, gainNode, filterNode, now)
         break
 
       default:
@@ -375,6 +417,25 @@ class GameSoundSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, time + 2.0)
 
     osc.stop(time + 2.0)
+  }
+
+  private playParticipantJoinSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
+    // Friendly welcoming "pop" sound - two quick ascending notes
+    osc.type = 'sine'
+
+    // Quick ascending two-note motif (like a friendly "hello")
+    osc.frequency.setValueAtTime(880, time) // A5
+    osc.frequency.setValueAtTime(1108.73, time + 0.08) // C#6 - major third up
+
+    filter.frequency.setValueAtTime(4000, time)
+    filter.Q.setValueAtTime(1, time)
+
+    // Volume based on notification level
+    gain.gain.setValueAtTime(volumeLevels.notification, time)
+    gain.gain.exponentialRampToValueAtTime(volumeLevels.notification * 0.8, time + 0.08)
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.25)
+
+    osc.stop(time + 0.25)
   }
 
   // Utility method for chained sound sequences

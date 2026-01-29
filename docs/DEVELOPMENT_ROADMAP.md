@@ -127,7 +127,7 @@ Implement the core SaaS platform features including subscription management, whi
 - [ ] Platform administrator dashboard
 - [ ] Organization management interface
 - [ ] Subscription plan management
-- [ ] Basic billing integration with Stripe
+- [ ] Manual billing system (invoices + EFT - Stripe unavailable in SA)
 
 **Technical Tasks:**
 ```javascript
@@ -199,19 +199,20 @@ Implement the core SaaS platform features including subscription management, whi
 **Team Focus**: Backend & Business Logic
 
 **Deliverables:**
-- [ ] Complete Stripe integration for subscriptions
+- [ ] Complete manual billing system (invoices, EFT tracking, admin approval)
 - [ ] Module access control system
 - [ ] Usage tracking and billing events
 - [ ] Subscription upgrade/downgrade flows
 
 **Technical Tasks:**
 ```javascript
-// Billing System
-- Stripe webhook handling for subscription events
+// Billing System (Manual - Stripe unavailable in South Africa)
+- Invoice generation and PDF export
+- EFT payment tracking and confirmation
+- Platform Admin subscription activation workflow
 - Module access verification system
-- Usage-based billing calculations
-- Automated subscription lifecycle management
-- Payment failure handling and retry logic
+- Subscription expiry notifications
+- Payment history and reporting
 ```
 
 **Success Criteria:**
@@ -221,8 +222,8 @@ Implement the core SaaS platform features including subscription management, whi
 - ✅ Payment failures handled gracefully
 
 **Key Risks & Mitigation:**
-- **Risk**: Complex billing logic
-  - **Mitigation**: Use Stripe's built-in subscription management
+- **Risk**: Manual billing overhead
+  - **Mitigation**: Streamlined admin interface, automated invoice generation, email notifications
 - **Risk**: Branding system performance impact
   - **Mitigation**: CSS variables for runtime theming, avoid JavaScript DOM manipulation
 
@@ -470,7 +471,7 @@ Complete remaining game modules, implement advanced features, and prepare for pr
 ### Third-Party Integrations
 ```javascript
 // External Services
-- Stripe for subscription billing
+- Manual invoicing system (EFT payments - Stripe unavailable in SA)
 - SendGrid for email delivery
 - Sentry for error tracking
 - Google Analytics for usage analytics
@@ -501,10 +502,10 @@ Complete remaining game modules, implement advanced features, and prepare for pr
 - **Mitigation**: Comprehensive security rules testing, third-party audit
 - **Contingency**: Implement additional application-level validation
 
-**3. Billing Integration Complexity**
-- **Risk**: Revenue loss due to billing failures
-- **Mitigation**: Stripe's proven subscription management, extensive testing
-- **Contingency**: Manual billing processes for initial customers
+**3. Manual Billing Management**
+- **Risk**: Administrative overhead with manual payment verification
+- **Mitigation**: Streamlined Platform Admin interface, automated notifications
+- **Contingency**: Hire part-time admin support as customer base grows
 
 **4. Game Module Development Complexity**
 - **Risk**: Underestimating development time for complex games
@@ -575,7 +576,7 @@ Complete remaining game modules, implement advanced features, and prepare for pr
 
 **Infrastructure:**
 - Firebase: $200-2000/month (usage-based)
-- Stripe: 2.9% + $0.30 per transaction
+- Bank fees: ~R10-50 per EFT transaction (negligible)
 - Other services: $300/month
 
 **Team (Post-Launch):**

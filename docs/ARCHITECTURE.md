@@ -39,7 +39,7 @@ Firebase Project: traind-platform
 │   │   └── settings/ (Document)
 │   │       ├── branding: { logo, colors, theme }
 │   │       ├── subscription: { plan, modules, limits }
-│   │       └── billing: { customerId, status }
+│   │       └── billing: { plan, status, invoiceRef, paidAt }
 │   │
 │   └── {orgId-2}/
 │       └── [same structure]
@@ -210,16 +210,18 @@ const OrganizationSchema = {
   domain: "acme.com",
   subscription: {
     plan: "professional", // basic | professional | enterprise
-    status: "active",
-    stripeCustomerId: "cus_xxxxx",
+    status: "active", // active | trial | expired | suspended
     modules: ["quiz", "millionaire", "bingo"],
     limits: {
       maxParticipants: 200,
       maxSessions: -1, // unlimited
       maxTrainers: 10
     },
-    billingCycle: "monthly",
-    nextBillingDate: "2024-01-15T00:00:00Z"
+    // Manual billing fields (Stripe unavailable in South Africa)
+    invoiceRef: "INV-2024-001",
+    paidAt: "2024-01-01T00:00:00Z",
+    expiresAt: "2025-01-01T00:00:00Z",
+    priceZAR: 14000 // Annual price in South African Rand
   },
   branding: {
     logo: "https://storage.googleapis.com/...",
@@ -1006,7 +1008,6 @@ self.addEventListener('fetch', (event) => {
 // functions/src/index.js
 import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
-import { stripe } from './billing.js'
 
 // Handle new organization creation
 export const onOrganizationCreated = onDocumentCreated(
@@ -1014,18 +1015,14 @@ export const onOrganizationCreated = onDocumentCreated(
   async (event) => {
     const orgData = event.data.data()
 
-    // Create Stripe customer
-    const customer = await stripe.customers.create({
-      email: orgData.ownerEmail,
-      name: orgData.name,
-      metadata: {
-        organizationId: event.params.orgId
-      }
-    })
+    // Send welcome email to organization owner
+    await sendWelcomeEmail(orgData.ownerEmail, orgData.name)
 
-    // Update organization with Stripe customer ID
+    // Initialize organization with trial subscription
     await event.data.ref.update({
-      'subscription.stripeCustomerId': customer.id
+      'subscription.status': 'trial',
+      'subscription.plan': 'basic',
+      'subscription.expiresAt': new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 day trial
     })
   }
 )
@@ -1041,6 +1038,24 @@ export const onSubscriptionUpdated = onDocumentUpdated(
     if (before.subscription.plan !== after.subscription.plan) {
       // Update module access based on new plan
       await updateModuleAccess(event.params.orgId, after.subscription.plan)
+    }
+  }
+)
+
+// Scheduled: Check for expiring subscriptions and send reminders
+export const checkExpiringSubscriptions = onSchedule(
+  'every 24 hours',
+  async () => {
+    const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+
+    const expiringOrgs = await db
+      .collection('organizations')
+      .where('subscription.status', '==', 'active')
+      .where('subscription.expiresAt', '<=', thirtyDaysFromNow)
+      .get()
+
+    for (const doc of expiringOrgs.docs) {
+      await sendExpiryReminderEmail(doc.data())
     }
   }
 )
@@ -1078,7 +1093,7 @@ VITE_FIREBASE_STORAGE_BUCKET=traind-platform.appspot.com
 VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
 VITE_FIREBASE_APP_ID=1:123456789:web:abcdef
 
-VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...
+# Note: No Stripe - using manual invoicing (Stripe unavailable in South Africa)
 VITE_APP_ENV=production
 VITE_API_BASE_URL=https://us-central1-traind-platform.cloudfunctions.net
 
