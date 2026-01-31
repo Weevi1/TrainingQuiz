@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import QRCode from 'react-qr-code'
 import {
-  Play, Pause, Square, Users, Clock, BarChart, Download,
-  QrCode, Settings, ArrowLeft, Monitor, Smartphone,
-  CheckCircle, AlertCircle, Zap, Trophy, Target, X, Medal, Star
+  Play, Pause, Square, Users, Clock, Download,
+  QrCode, ArrowLeft,
+  Zap, Trophy, Target, X, Medal, Star, Award
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { FirestoreService, type GameSession, type Quiz, type Participant } from '../lib/firestore'
@@ -12,6 +12,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner'
 import { soundSystem } from '../lib/soundSystem'
 import { calculateSessionAwards, calculateBingoAwards, type Award, type AwardResults } from '../lib/awardCalculator'
 import { generateSessionPDF } from '../lib/pdfExport'
+import { downloadAttendanceCertificate } from '../lib/attendanceCertificate'
 
 type SessionStatus = 'waiting' | 'active' | 'paused' | 'completed'
 
@@ -39,18 +40,16 @@ export const SessionControl: React.FC = () => {
     completedCount: 0
   })
 
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [timeRemaining, setTimeRemaining] = useState(30)
   const [isTimerRunning, setIsTimerRunning] = useState(false)
+  const timerStartedAtRef = useRef<number>(0)       // Anchor: Date.now() when timer started
+  const sessionTimeLimitRef = useRef<number>(300)    // Total session time in seconds
   const [loading, setLoading] = useState(true)
   const [showQRCode, setShowQRCode] = useState(false)
   const [showFullscreenQR, setShowFullscreenQR] = useState(false)
   const [participantCountAnimating, setParticipantCountAnimating] = useState(false)
   const [qrSize, setQrSize] = useState(180)
-  const [revealAnswer, setRevealAnswer] = useState(false)
-  const [showAnswerDistribution, setShowAnswerDistribution] = useState(true)
   const previousParticipantCount = useRef(0)
-  const timerBroadcastRef = useRef<NodeJS.Timeout | null>(null)
 
   // Detect if this is a bingo session
   const isBingoSession = session?.gameType === 'bingo'
@@ -137,51 +136,52 @@ export const SessionControl: React.FC = () => {
     return unsubscribe
   }, [sessionId])
 
-  // Timer logic with broadcaster pattern (trainer is authoritative)
+  // Timer logic - anchor-based calculation (prevents drift, syncs with participants)
+  // Instead of decrementing, we calculate: remaining = timeLimit - elapsed
   useEffect(() => {
-    if (isTimerRunning && timeRemaining > 0 && session?.status === 'active') {
+    if (isTimerRunning && session?.status === 'active' && timerStartedAtRef.current > 0) {
       const timer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000)
+        const remaining = Math.max(0, sessionTimeLimitRef.current - elapsed)
+
         setTimeRemaining(prev => {
-          const newTime = prev - 1
-          if (newTime <= 0) {
-            setIsTimerRunning(false)
-            // For bingo, end the session when timer runs out
-            // For quiz, move to next question
-            if (isBingoSession) {
-              endSession()
-            } else {
-              moveToNextQuestion()
-            }
-            return 0
+          // Timer sounds on presenter only (phones are quiet)
+          if (remaining > 0 && remaining <= 10 && prev > remaining) {
+            soundSystem.play('timeWarning')
+          } else if (remaining > 10 && remaining <= 30 && prev > remaining) {
+            soundSystem.play('tick')
           }
-          return newTime
+
+          if (remaining <= 0 && prev > 0) {
+            setIsTimerRunning(false)
+            completeSession()
+          }
+
+          return remaining
         })
       }, 1000)
 
       return () => clearInterval(timer)
     }
-  }, [isTimerRunning, timeRemaining, session?.status, isBingoSession])
+  }, [isTimerRunning, session?.status])
 
-  // Timer broadcaster - sync timer to Firestore for participants to mirror
+  // Auto-end session when all participants complete the quiz
   useEffect(() => {
-    if (session?.status === 'active' && sessionId) {
-      // Broadcast timer every second when running
-      if (timerBroadcastRef.current) {
-        clearInterval(timerBroadcastRef.current)
-      }
+    if (session?.status !== 'active' || participants.length === 0 || isBingoSession) return
 
-      timerBroadcastRef.current = setInterval(() => {
-        FirestoreService.updateSessionTimer(sessionId, timeRemaining, currentQuestionIndex)
-          .catch(err => console.error('Timer broadcast error:', err))
-      }, 1000)
+    const allCompleted = participants.every(p =>
+      p.completed || p.gameState?.completed ||
+      (p.gameState?.answers?.length || 0) >= (quiz?.questions.length || 0)
+    )
 
-      return () => {
-        if (timerBroadcastRef.current) {
-          clearInterval(timerBroadcastRef.current)
-        }
-      }
+    if (allCompleted && quiz) {
+      // Brief delay before auto-ending to let final scores update
+      const timer = setTimeout(() => {
+        completeSession()
+      }, 3000)
+      return () => clearTimeout(timer)
     }
-  }, [session?.status, sessionId, timeRemaining, currentQuestionIndex])
+  }, [participants, session?.status, quiz, isBingoSession])
 
   const loadSession = async () => {
     if (!sessionId) return
@@ -204,7 +204,22 @@ export const SessionControl: React.FC = () => {
         // Bingo sessions may not require a quiz
         if (realSession.gameType === 'bingo') {
           setSession(realSession)
-          setTimeRemaining(realSession.settings?.timeLimit || 900)
+          const bingoTimeLimit = realSession.settings?.timeLimit || 900
+          sessionTimeLimitRef.current = bingoTimeLimit
+
+          if (realSession.status === 'active' && realSession.timerStartedAt) {
+            timerStartedAtRef.current = realSession.timerStartedAt
+            if (realSession.timerPaused) {
+              setTimeRemaining(realSession.pausedTimeRemaining || bingoTimeLimit)
+            } else {
+              const elapsed = Math.floor((Date.now() - realSession.timerStartedAt) / 1000)
+              const remaining = Math.max(0, bingoTimeLimit - elapsed)
+              setTimeRemaining(remaining)
+              if (remaining > 0) setIsTimerRunning(true)
+            }
+          } else {
+            setTimeRemaining(bingoTimeLimit)
+          }
           return
         }
         console.error('No quiz ID found in session')
@@ -224,12 +239,34 @@ export const SessionControl: React.FC = () => {
 
       setSession(realSession)
       setQuiz(realQuiz)
-      // For bingo, use session time limit; for quiz, use per-question time limit
-      setTimeRemaining(
-        realSession.gameType === 'bingo'
-          ? (realSession.settings?.timeLimit || 900)
-          : realQuiz.timeLimit
-      )
+
+      // Restore timer from Firestore anchor (handles page refresh during active session)
+      const totalTimeLimit = realSession.gameType === 'bingo'
+        ? (realSession.settings?.timeLimit || 900)
+        : realQuiz.timeLimit * realQuiz.questions.length
+
+      sessionTimeLimitRef.current = totalTimeLimit
+
+      if (realSession.status === 'active' && realSession.timerStartedAt) {
+        // Active session with anchor - calculate remaining from anchor
+        timerStartedAtRef.current = realSession.timerStartedAt
+
+        if (realSession.timerPaused) {
+          // Timer was paused - show paused remaining time
+          setTimeRemaining(realSession.pausedTimeRemaining || totalTimeLimit)
+        } else {
+          // Timer is running - calculate current remaining and resume
+          const elapsed = Math.floor((Date.now() - realSession.timerStartedAt) / 1000)
+          const remaining = Math.max(0, totalTimeLimit - elapsed)
+          setTimeRemaining(remaining)
+          if (remaining > 0) {
+            setIsTimerRunning(true)
+          }
+        }
+      } else {
+        // Session not yet started - show full time
+        setTimeRemaining(totalTimeLimit)
+      }
 
     } catch (error) {
       console.error('Error loading session:', error)
@@ -308,8 +345,12 @@ export const SessionControl: React.FC = () => {
     if (!session) return
 
     try {
-      // Play game start fanfare
-      soundSystem.play('gameStart')
+      // Play countdown sounds on presenter (training room speakers)
+      // 0s: tick (3), 1s: tick (2), 2s: tick (1), 3s: gameStart (GO!)
+      soundSystem.play('tick')
+      setTimeout(() => soundSystem.play('tick'), 1000)
+      setTimeout(() => soundSystem.play('tick'), 2000)
+      setTimeout(() => soundSystem.play('gameStart'), 3000)
 
       // First, set status to 'countdown' to trigger countdown on participant devices
       await FirestoreService.updateSession(session.id, {
@@ -318,14 +359,29 @@ export const SessionControl: React.FC = () => {
 
       setSession(prev => prev ? { ...prev, status: 'countdown' } : null)
 
-      // After 4 seconds (3-2-1-GO!), set to active
+      // After 4 seconds (3-2-1-GO!), set to active with timer anchor
       setTimeout(async () => {
         try {
+          const timerStart = Date.now()
+          const totalTimeLimit = isBingoSession
+            ? (session.settings?.timeLimit || 900)
+            : (quiz ? quiz.timeLimit * quiz.questions.length : 300)
+
+          // Store anchor in refs for local calculation
+          timerStartedAtRef.current = timerStart
+          sessionTimeLimitRef.current = totalTimeLimit
+
+          // Write anchor to Firestore so all devices can sync
           await FirestoreService.updateSession(session.id, {
             status: 'active',
-            startTime: new Date()
+            startTime: new Date(),
+            timerStartedAt: timerStart,
+            sessionTimeLimit: totalTimeLimit,
+            timerPaused: false
           })
+
           setSession(prev => prev ? { ...prev, status: 'active' } : null)
+          setTimeRemaining(totalTimeLimit)
           setIsTimerRunning(true)
         } catch (error) {
           console.error('Error activating session:', error)
@@ -337,20 +393,45 @@ export const SessionControl: React.FC = () => {
     }
   }
 
-  const pauseSession = () => {
+  const pauseSession = async () => {
     setIsTimerRunning(false)
-  }
+    const remaining = timeRemaining
 
-  const resumeSession = () => {
-    setIsTimerRunning(true)
-  }
-
-  const endSession = async () => {
-    if (!session) return
-
-    if (!confirm('Are you sure you want to end this session? This action cannot be undone.')) {
-      return
+    // Write paused state so participants know
+    if (session) {
+      try {
+        await FirestoreService.updateSession(session.id, {
+          timerPaused: true,
+          pausedTimeRemaining: remaining
+        })
+      } catch (error) {
+        console.error('Error syncing pause:', error)
+      }
     }
+  }
+
+  const resumeSession = async () => {
+    // Recalculate anchor: pretend timer started (sessionTimeLimit - remaining) seconds ago
+    const remaining = timeRemaining
+    const newAnchor = Date.now() - (sessionTimeLimitRef.current - remaining) * 1000
+    timerStartedAtRef.current = newAnchor
+    setIsTimerRunning(true)
+
+    // Write new anchor so participants stay in sync
+    if (session) {
+      try {
+        await FirestoreService.updateSession(session.id, {
+          timerStartedAt: newAnchor,
+          timerPaused: false
+        })
+      } catch (error) {
+        console.error('Error syncing resume:', error)
+      }
+    }
+  }
+
+  const completeSession = async () => {
+    if (!session || session.status === 'completed') return
 
     try {
       await FirestoreService.updateSession(session.id, {
@@ -360,62 +441,49 @@ export const SessionControl: React.FC = () => {
 
       setSession(prev => prev ? { ...prev, status: 'completed' } : null)
       setIsTimerRunning(false)
+
+      // Play completion sound (like v1's playQuizComplete)
+      soundSystem.play('fanfare')
+      setTimeout(() => soundSystem.play('celebration'), 500)
     } catch (error) {
       console.error('Error ending session:', error)
-      alert('Error ending session')
     }
   }
 
-  const moveToNextQuestion = () => {
-    if (!quiz) return
+  const endSession = async () => {
+    if (!session) return
 
-    const nextIndex = currentQuestionIndex + 1
-    if (nextIndex < quiz.questions.length) {
-      setCurrentQuestionIndex(nextIndex)
-      setTimeRemaining(quiz.timeLimit)
-      setRevealAnswer(false) // Reset reveal state for new question
-      if (session?.status === 'active') {
-        setIsTimerRunning(true)
-      }
-    } else {
-      endSession()
+    if (!confirm('Are you sure you want to end this session? This action cannot be undone.')) {
+      return
     }
+
+    await completeSession()
   }
 
-  // Calculate answer distribution for current question
-  const getAnswerDistribution = () => {
-    if (!currentQuestion) return []
+  const resetTimer = async () => {
+    const totalTimeLimit = isBingoSession
+      ? (session?.settings?.timeLimit || 900)
+      : (quiz ? quiz.timeLimit * quiz.questions.length : 300)
 
-    const distribution = currentQuestion.options.map(() => 0)
-    const participantsWithAnswers = participants.filter(p =>
-      p.gameState?.answers && p.gameState.answers[currentQuestionIndex]
-    )
-
-    participantsWithAnswers.forEach(p => {
-      const answer = p.gameState?.answers?.[currentQuestionIndex]
-      if (answer && answer.selectedAnswer >= 0 && answer.selectedAnswer < distribution.length) {
-        distribution[answer.selectedAnswer]++
-      }
-    })
-
-    const total = participantsWithAnswers.length || 1
-    return distribution.map(count => ({
-      count,
-      percentage: Math.round((count / total) * 100)
-    }))
-  }
-
-  const moveToPreviousQuestion = () => {
-    if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(currentQuestionIndex - 1)
-      setTimeRemaining(quiz?.timeLimit || 30)
-      setIsTimerRunning(false)
-    }
-  }
-
-  const resetTimer = () => {
-    setTimeRemaining(quiz?.timeLimit || 30)
+    const newAnchor = Date.now()
+    timerStartedAtRef.current = newAnchor
+    sessionTimeLimitRef.current = totalTimeLimit
+    setTimeRemaining(totalTimeLimit)
     setIsTimerRunning(false)
+
+    // Write reset anchor to Firestore
+    if (session) {
+      try {
+        await FirestoreService.updateSession(session.id, {
+          timerStartedAt: newAnchor,
+          sessionTimeLimit: totalTimeLimit,
+          timerPaused: true,
+          pausedTimeRemaining: totalTimeLimit
+        })
+      } catch (error) {
+        console.error('Error syncing timer reset:', error)
+      }
+    }
   }
 
   const formatTime = (seconds: number) => {
@@ -424,12 +492,19 @@ export const SessionControl: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  // Convert raw score (100 per correct answer) to percentage string
+  const scoreToPercentage = (rawScore: number | string): string => {
+    if (typeof rawScore === 'string') return rawScore
+    if (!quiz || quiz.questions.length === 0) return `${rawScore}`
+    return `${Math.round((rawScore / (quiz.questions.length * 100)) * 100)}%`
+  }
+
   // Export PDF report
   const handleExportPDF = async () => {
     if (!session || !quiz) return
 
     try {
-      soundSystem.play('select')
+      soundSystem.play('click')
       await generateSessionPDF(
         session,
         quiz,
@@ -442,6 +517,43 @@ export const SessionControl: React.FC = () => {
       console.error('Error generating PDF:', error)
       alert('Failed to generate PDF report. Please try again.')
     }
+  }
+
+  // Bulk download attendance certificates for all participants
+  const handleBulkAttendanceCertificates = async () => {
+    if (!session) return
+    soundSystem.play('click')
+    for (const participant of participants) {
+      await downloadAttendanceCertificate({
+        participantName: participant.name,
+        sessionTitle: session.title,
+        completionDate: new Date(),
+        organizationName: currentOrganization?.name,
+        organizationLogo: currentOrganization?.branding?.logo,
+        sessionCode: session.code,
+        primaryColor: currentOrganization?.branding?.primaryColor,
+        secondaryColor: currentOrganization?.branding?.secondaryColor
+      })
+      // Brief delay between downloads to prevent browser blocking
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+    soundSystem.play('celebration')
+  }
+
+  // Download single participant attendance certificate
+  const handleSingleAttendanceCertificate = async (participantName: string) => {
+    if (!session) return
+    soundSystem.play('click')
+    await downloadAttendanceCertificate({
+      participantName,
+      sessionTitle: session.title,
+      completionDate: new Date(),
+      organizationName: currentOrganization?.name,
+      organizationLogo: currentOrganization?.branding?.logo,
+      sessionCode: session.code,
+      primaryColor: currentOrganization?.branding?.primaryColor,
+      secondaryColor: currentOrganization?.branding?.secondaryColor
+    })
   }
 
   if (loading) {
@@ -468,7 +580,6 @@ export const SessionControl: React.FC = () => {
     )
   }
 
-  const currentQuestion = quiz?.questions?.[currentQuestionIndex]
   const sessionUrl = `${window.location.origin}/join/${session.code}`
 
   return (
@@ -670,13 +781,24 @@ export const SessionControl: React.FC = () => {
                   <h2 className="text-xl font-bold" style={{ color: 'var(--text-color)' }}>
                     Session Complete
                   </h2>
-                  <button
-                    onClick={handleExportPDF}
-                    className="btn-primary flex items-center space-x-2"
-                  >
-                    <Download size={16} />
-                    <span>Export PDF Report</span>
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    {currentOrganization?.settings?.enableAttendanceCertificates && (
+                      <button
+                        onClick={handleBulkAttendanceCertificates}
+                        className="btn-secondary flex items-center space-x-2"
+                      >
+                        <Award size={16} />
+                        <span>All Certificates</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={handleExportPDF}
+                      className="btn-primary flex items-center space-x-2"
+                    >
+                      <Download size={16} />
+                      <span>Export PDF Report</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Top Performers Podium */}
@@ -697,7 +819,7 @@ export const SessionControl: React.FC = () => {
                             <span className="text-2xl font-bold text-white">2</span>
                           </div>
                           <p className="font-medium mt-2 text-sm truncate max-w-20">{awardResults.topPerformers[1].participantName}</p>
-                          <p className="text-xs text-text-secondary">{awardResults.topPerformers[1].value} pts</p>
+                          <p className="text-xs text-text-secondary">{scoreToPercentage(awardResults.topPerformers[1].value)}</p>
                         </div>
                       )}
                       {/* 1st place */}
@@ -711,7 +833,7 @@ export const SessionControl: React.FC = () => {
                             <span className="text-3xl font-bold text-white">1</span>
                           </div>
                           <p className="font-bold mt-2 truncate max-w-24">{awardResults.topPerformers[0].participantName}</p>
-                          <p className="text-sm text-primary font-semibold">{awardResults.topPerformers[0].value} pts</p>
+                          <p className="text-sm text-primary font-semibold">{scoreToPercentage(awardResults.topPerformers[0].value)}</p>
                         </div>
                       )}
                       {/* 3rd place */}
@@ -724,7 +846,7 @@ export const SessionControl: React.FC = () => {
                             <span className="text-2xl font-bold text-white">3</span>
                           </div>
                           <p className="font-medium mt-2 text-sm truncate max-w-20">{awardResults.topPerformers[2].participantName}</p>
-                          <p className="text-xs text-text-secondary">{awardResults.topPerformers[2].value} pts</p>
+                          <p className="text-xs text-text-secondary">{scoreToPercentage(awardResults.topPerformers[2].value)}</p>
                         </div>
                       )}
                     </div>
@@ -778,6 +900,107 @@ export const SessionControl: React.FC = () => {
                   </div>
                 )}
 
+                {/* Full Leaderboard */}
+                <div className="card mb-6">
+                  <div className="flex items-center space-x-2 mb-6">
+                    <Users size={24} style={{ color: 'var(--primary-color)' }} />
+                    <h2 className="text-xl font-bold">Final Leaderboard</h2>
+                  </div>
+                  <div className="space-y-2">
+                    {participants
+                      .slice()
+                      .sort((a, b) => {
+                        const scoreA = a.gameState?.score || a.finalScore || 0
+                        const scoreB = b.gameState?.score || b.finalScore || 0
+                        if (scoreB !== scoreA) return scoreB - scoreA
+                        const answersA = a.gameState?.answers || []
+                        const answersB = b.gameState?.answers || []
+                        const avgTimeA = answersA.length > 0 ? answersA.reduce((s: number, ans: any) => s + (ans.timeSpent || 0), 0) / answersA.length : 999
+                        const avgTimeB = answersB.length > 0 ? answersB.reduce((s: number, ans: any) => s + (ans.timeSpent || 0), 0) / answersB.length : 999
+                        return avgTimeA - avgTimeB
+                      })
+                      .map((participant, index) => {
+                        const rank = index + 1
+                        const answeredCount = participant.gameState?.answers?.length || 0
+                        const correctCount = participant.gameState?.answers?.filter((a: any) => a.isCorrect).length || 0
+                        const totalQ = quiz?.questions.length || 1
+                        const pct = totalQ > 0 ? Math.round((correctCount / totalQ) * 100) : 0
+                        const avgTime = answeredCount > 0
+                          ? Math.round((participant.gameState?.answers?.reduce((sum: number, a: any) => sum + (a.timeSpent || 0), 0) || 0) / answeredCount)
+                          : 0
+                        let bestStreak = 0
+                        let curStreak = 0
+                        ;(participant.gameState?.answers || []).forEach((a: any) => {
+                          if (a.isCorrect) { curStreak++; bestStreak = Math.max(bestStreak, curStreak) }
+                          else { curStreak = 0 }
+                        })
+                        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : ''
+                        const isCompleted = participant.completed || participant.gameState?.completed ||
+                          answeredCount >= totalQ
+
+                        return (
+                          <div
+                            key={participant.id}
+                            className="flex items-center justify-between p-3 rounded-lg"
+                            style={{
+                              backgroundColor: rank === 1 ? 'rgba(251, 191, 36, 0.15)'
+                                : rank === 2 ? 'rgba(156, 163, 175, 0.15)'
+                                : rank === 3 ? 'rgba(217, 119, 6, 0.15)'
+                                : 'var(--surface-color)'
+                            }}
+                          >
+                            <div className="flex items-center space-x-3">
+                              <div className="w-8 text-center font-bold text-lg">
+                                {medal || rank}
+                              </div>
+                              <span className="text-lg">{(participant as any).avatar || '😀'}</span>
+                              <div>
+                                <span className="font-medium">{participant.name}</span>
+                                {isCompleted && (
+                                  <span
+                                    className="ml-2 text-xs px-1.5 py-0.5 rounded"
+                                    style={{ backgroundColor: 'var(--success-light-color, #dcfce7)', color: 'var(--success-color, #166534)' }}
+                                  >
+                                    Done
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center space-x-4 text-sm">
+                              <div className="text-center">
+                                <div className="font-bold text-lg" style={{ color: 'var(--primary-color)' }}>{pct}%</div>
+                                <div className="text-xs text-text-secondary">{correctCount}/{totalQ}</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="font-medium">{avgTime}s</div>
+                                <div className="text-xs text-text-secondary">Avg</div>
+                              </div>
+                              {bestStreak >= 2 && (
+                                <div className="text-center">
+                                  <div className="font-medium">🔥 {bestStreak}</div>
+                                  <div className="text-xs text-text-secondary">Streak</div>
+                                </div>
+                              )}
+                              {currentOrganization?.settings?.enableAttendanceCertificates && (
+                                <button
+                                  onClick={() => handleSingleAttendanceCertificate(participant.name)}
+                                  className="p-1.5 rounded-lg transition-colors hover:bg-white/20"
+                                  style={{ color: 'var(--primary-color)' }}
+                                  title={`Download attendance certificate for ${participant.name}`}
+                                >
+                                  <Download size={16} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    {participants.length === 0 && (
+                      <p className="text-center text-text-secondary py-4">No participants</p>
+                    )}
+                  </div>
+                </div>
+
                 {/* Final Statistics */}
                 <div className="card">
                   <h3 className="font-semibold mb-4">Final Results Summary</h3>
@@ -787,7 +1010,7 @@ export const SessionControl: React.FC = () => {
                       <div className="text-sm text-text-secondary">Total Participants</div>
                     </div>
                     <div className="text-center p-4 rounded-lg" style={{ backgroundColor: 'var(--surface-color)' }}>
-                      <div className="text-3xl font-bold" style={{ color: 'var(--success-color)' }}>{sessionStats.averageScore}</div>
+                      <div className="text-3xl font-bold" style={{ color: 'var(--success-color)' }}>{scoreToPercentage(sessionStats.averageScore)}</div>
                       <div className="text-sm text-text-secondary">Average Score</div>
                     </div>
                     {isBingoSession ? (
@@ -969,46 +1192,37 @@ export const SessionControl: React.FC = () => {
                     </div>
                   </>
                 ) : (
-                  /* QUIZ ACTIVE STATE: Show questions */
+                  /* QUIZ ACTIVE STATE: Show participant progress (presenter view) */
                   <>
-                    {/* Current Question Display */}
                     <div className="card">
                       <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold">
-                          Question {currentQuestionIndex + 1} of {quiz.questions.length}
-                        </h2>
+                        <h2 className="text-xl font-bold">Quiz Session Active</h2>
                         <div
-                          className="px-3 py-1 rounded text-sm font-medium"
+                          className="px-3 py-1 rounded text-sm font-medium animate-pulse"
                           style={{
-                            backgroundColor: session.status === 'active' ? 'var(--success-light-color, #dcfce7)' :
-                              session.status === 'paused' ? 'var(--warning-light-color, #fef3c7)' :
-                              'var(--surface-color)',
-                            color: session.status === 'active' ? 'var(--success-color, #166534)' :
-                              session.status === 'paused' ? 'var(--warning-color, #92400e)' :
-                              'var(--text-secondary-color)'
+                            backgroundColor: 'var(--success-light-color, #dcfce7)',
+                            color: 'var(--success-color, #166534)'
                           }}
                         >
-                          {session.status.toUpperCase()}
+                          LIVE
                         </div>
                       </div>
 
-                      {/* Timer */}
+                      {/* Session Timer */}
                       <div className="mb-6">
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-text-secondary">Time Remaining</span>
-                          <button
-                            onClick={resetTimer}
-                            className="text-sm text-primary hover:underline"
-                          >
-                            Reset
-                          </button>
+                          <span className="text-sm text-text-secondary">Session Time Remaining</span>
                         </div>
                         <div className="flex items-center space-x-4">
                           <div
-                            className="text-4xl font-bold"
-                            style={{ color: timeRemaining <= 10 ? 'var(--error-color)' : 'var(--primary-color)' }}
+                            className={`text-4xl font-bold font-mono ${timeRemaining <= 60 ? 'animate-pulse' : ''}`}
+                            style={{
+                              color: timeRemaining <= 60 ? 'var(--error-color)' :
+                                timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
+                                'var(--primary-color)'
+                            }}
                           >
-                            {timeRemaining}s
+                            {formatTime(timeRemaining)}
                           </div>
                           <div className="flex-1">
                             <div
@@ -1018,8 +1232,10 @@ export const SessionControl: React.FC = () => {
                               <div
                                 className="h-3 rounded-full transition-all duration-1000"
                                 style={{
-                                  width: `${(timeRemaining / quiz.timeLimit) * 100}%`,
-                                  backgroundColor: timeRemaining <= 10 ? 'var(--error-color)' : 'var(--primary-color)'
+                                  width: `${(timeRemaining / (quiz.timeLimit * quiz.questions.length)) * 100}%`,
+                                  backgroundColor: timeRemaining <= 60 ? 'var(--error-color)' :
+                                    timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
+                                    'var(--primary-color)'
                                 }}
                               />
                             </div>
@@ -1027,138 +1243,96 @@ export const SessionControl: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Question Content */}
-                      <div className="mb-6">
-                        <h3 className="text-lg font-semibold mb-4">{currentQuestion.questionText}</h3>
-                        <div className="grid gap-3">
-                          {(() => {
-                            const distribution = getAnswerDistribution()
-                            const answerLabels = ['A', 'B', 'C', 'D']
-                            return currentQuestion.options.map((option, index) => {
-                              const isCorrect = index === currentQuestion.correctAnswer
-                              const showCorrect = revealAnswer && isCorrect
-                              const distData = distribution[index] || { count: 0, percentage: 0 }
+                      {/* Quiz Info Summary */}
+                      <div
+                        className="grid grid-cols-3 gap-4 text-center mb-6 p-4 rounded-lg"
+                        style={{ backgroundColor: 'var(--background-color)' }}
+                      >
+                        <div>
+                          <div className="text-2xl font-bold text-primary">{quiz.questions.length}</div>
+                          <div className="text-sm text-text-secondary">Questions</div>
+                        </div>
+                        <div>
+                          <div className="text-2xl font-bold text-primary">{quiz.timeLimit}s</div>
+                          <div className="text-sm text-text-secondary">Per Question</div>
+                        </div>
+                        <div>
+                          <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>
+                            {sessionStats.completedCount}/{sessionStats.totalParticipants}
+                          </div>
+                          <div className="text-sm text-text-secondary">Completed</div>
+                        </div>
+                      </div>
+
+                      {/* Participant Progress */}
+                      <div className="mb-4">
+                        <h3 className="text-lg font-semibold mb-4">Participant Progress</h3>
+                        <div className="space-y-3">
+                          {participants
+                            .slice()
+                            .sort((a, b) => (b.gameState?.score || 0) - (a.gameState?.score || 0))
+                            .map((participant) => {
+                              const answeredCount = participant.gameState?.answers?.length || 0
+                              const totalQ = quiz.questions.length
+                              const progress = totalQ > 0 ? (answeredCount / totalQ) * 100 : 0
+                              const isCompleted = participant.completed || participant.gameState?.completed ||
+                                answeredCount >= totalQ
+                              const score = participant.gameState?.score || 0
 
                               return (
                                 <div
-                                  key={index}
-                                  className="p-3 rounded-lg border relative overflow-hidden"
+                                  key={participant.id}
+                                  className="p-3 rounded-lg"
                                   style={{
-                                    borderColor: showCorrect
-                                      ? 'var(--success-color)'
-                                      : 'var(--border-color)',
-                                    backgroundColor: showCorrect
+                                    backgroundColor: isCompleted
                                       ? 'var(--success-light-color, #dcfce7)'
                                       : 'var(--surface-color)'
                                   }}
                                 >
-                                  {/* Answer distribution bar (background) */}
-                                  {showAnswerDistribution && distData.percentage > 0 && (
-                                    <div
-                                      className="absolute inset-y-0 left-0 transition-all duration-500"
-                                      style={{
-                                        width: `${distData.percentage}%`,
-                                        backgroundColor: showCorrect
-                                          ? 'var(--success-color)'
-                                          : 'var(--primary-light-color)',
-                                        opacity: showCorrect ? 0.3 : 0.2
-                                      }}
-                                    />
-                                  )}
-                                  <div className="flex items-center space-x-3 relative z-10">
-                                    <div
-                                      className="w-8 h-8 rounded-full border-2 flex items-center justify-center font-bold text-sm"
-                                      style={{
-                                        borderColor: showCorrect
-                                          ? 'var(--success-color)'
-                                          : 'var(--border-color)',
-                                        backgroundColor: showCorrect
-                                          ? 'var(--success-color)'
-                                          : 'transparent',
-                                        color: showCorrect ? 'white' : 'var(--text-secondary-color)'
-                                      }}
-                                    >
-                                      {showCorrect ? (
-                                        <CheckCircle size={16} style={{ color: 'white' }} />
-                                      ) : (
-                                        answerLabels[index]
-                                      )}
-                                    </div>
-                                    <span className={`flex-1 ${showCorrect ? 'font-medium' : ''}`}>
-                                      {option}
-                                    </span>
-                                    {/* Show distribution stats */}
-                                    {showAnswerDistribution && distData.count > 0 && (
-                                      <div className="flex items-center space-x-2 text-sm">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-lg">{(participant as any).avatar || '😀'}</span>
+                                      <span className="font-medium">{participant.name}</span>
+                                      {isCompleted && (
                                         <span
-                                          className="px-2 py-1 rounded"
+                                          className="px-2 py-0.5 rounded-full text-xs font-bold"
                                           style={{
-                                            backgroundColor: 'var(--surface-color)',
-                                            color: 'var(--text-secondary-color)'
+                                            backgroundColor: 'var(--success-color)',
+                                            color: 'white'
                                           }}
                                         >
-                                          {distData.count} ({distData.percentage}%)
+                                          DONE
                                         </span>
-                                      </div>
-                                    )}
+                                      )}
+                                    </div>
+                                    <div className="flex items-center space-x-3 text-sm text-text-secondary">
+                                      <span>{answeredCount}/{totalQ} answered</span>
+                                      <span className="font-semibold" style={{ color: 'var(--primary-color)' }}>
+                                        {score} pts
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div
+                                    className="w-full rounded-full h-2"
+                                    style={{ backgroundColor: 'var(--border-color)' }}
+                                  >
+                                    <div
+                                      className="h-2 rounded-full transition-all duration-500"
+                                      style={{
+                                        width: `${progress}%`,
+                                        backgroundColor: isCompleted
+                                          ? 'var(--success-color)'
+                                          : 'var(--primary-color)'
+                                      }}
+                                    />
                                   </div>
                                 </div>
                               )
-                            })
-                          })()}
+                            })}
+                          {participants.length === 0 && (
+                            <p className="text-center text-text-secondary py-4">No participants yet</p>
+                          )}
                         </div>
-                      </div>
-
-                      {/* Question Navigation */}
-                      <div className="flex justify-between items-center">
-                        <button
-                          onClick={moveToPreviousQuestion}
-                          disabled={currentQuestionIndex === 0}
-                          className="btn-secondary disabled:opacity-50"
-                        >
-                          Previous
-                        </button>
-
-                        <div className="flex items-center space-x-3">
-                          {/* Reveal Answer Button */}
-                          <button
-                            onClick={() => {
-                              setRevealAnswer(!revealAnswer)
-                              if (!revealAnswer) {
-                                soundSystem.play('ding')
-                              }
-                            }}
-                            className="px-4 py-2 rounded-lg font-medium transition-all"
-                            style={{
-                              backgroundColor: revealAnswer
-                                ? 'var(--success-color)'
-                                : 'var(--surface-color)',
-                              color: revealAnswer
-                                ? 'white'
-                                : 'var(--text-color)',
-                              border: '2px solid',
-                              borderColor: revealAnswer
-                                ? 'var(--success-color)'
-                                : 'var(--border-color)'
-                            }}
-                          >
-                            {revealAnswer ? '✓ Answer Revealed' : 'Reveal Answer'}
-                          </button>
-
-                          <span className="text-sm text-text-secondary">
-                            {currentQuestionIndex + 1} / {quiz.questions.length}
-                          </span>
-                        </div>
-
-                        <button
-                          onClick={() => {
-                            setRevealAnswer(true) // Auto-reveal before moving
-                            setTimeout(() => moveToNextQuestion(), 500)
-                          }}
-                          className="btn-primary"
-                        >
-                          {currentQuestionIndex === quiz.questions.length - 1 ? 'End Quiz' : 'Next'}
-                        </button>
                       </div>
                     </div>
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Trophy, Star, Zap, Target, Clock, CheckCircle, XCircle, Award, TrendingUp, Crown, Medal, Users, Grid } from 'lucide-react'
 import { FirestoreService, type Organization, type Participant } from '../lib/firestore'
@@ -6,7 +6,6 @@ import { useGameSounds } from '../lib/soundSystem'
 import { useVisualEffects } from '../lib/visualEffects'
 import { SoundControl } from '../components/SoundControl'
 import { downloadCertificate } from '../lib/certificate'
-import { shareResultsImage, downloadShareImage } from '../lib/shareImage'
 import { applyOrganizationBranding } from '../lib/applyBranding'
 import type { BingoGameState } from '../components/gameModules/BingoGame'
 
@@ -49,6 +48,7 @@ export const ParticipantResults: React.FC = () => {
   const location = useLocation()
   const resultsState = location.state as ResultsState
   const soundsPlayedRef = useRef(false)
+  const [organization, setOrganization] = useState<Organization | null>(null)
 
   // Sound and visual effects hooks
   const { playSound, playSequence } = useGameSounds(true)
@@ -64,8 +64,11 @@ export const ParticipantResults: React.FC = () => {
       if (resultsState?.organizationId) {
         try {
           const org = await FirestoreService.getOrganization(resultsState.organizationId)
-          if (org?.branding) {
-            applyOrganizationBranding(org.branding)
+          if (org) {
+            setOrganization(org)
+            if (org.branding) {
+              applyOrganizationBranding(org.branding)
+            }
           }
         } catch (error) {
           console.error('Error loading organization branding:', error)
@@ -75,7 +78,8 @@ export const ParticipantResults: React.FC = () => {
     loadBranding()
   }, [resultsState?.organizationId])
 
-  // Play celebration sounds based on score
+  // Play celebration sounds only for award-winning participants (80%+ or bingo winners)
+  // Other phones stay quiet - main sounds come through the presenter
   useEffect(() => {
     if (!resultsState || soundsPlayedRef.current) return
 
@@ -83,52 +87,42 @@ export const ParticipantResults: React.FC = () => {
 
     if (isBingo) {
       const bingoState = resultsState.gameState as BingoGameState
-      const passed = bingoState.gameWon
 
-      setTimeout(() => {
-        if (passed) {
+      if (bingoState.gameWon) {
+        setTimeout(() => {
           playSequence([
             { sound: 'fanfare', delay: 0 },
             { sound: 'celebration', delay: 500 },
             { sound: 'achievement', delay: 1000 }
           ])
           triggerScreenEffect('celebration-confetti')
-        } else if (bingoState.cellsMarked / bingoState.totalCells >= 0.8) {
-          playSequence([
-            { sound: 'fanfare', delay: 0 },
-            { sound: 'celebration', delay: 600 }
-          ])
-          triggerScreenEffect('screen-flash', { color: 'var(--success-color)' })
-        } else {
-          playSound('gameEnd')
-        }
-      }, 500)
+        }, 500)
+      }
+      // Non-winners: no sound
     } else {
       const quizState = resultsState.gameState as { answers: any[]; totalQuestions: number }
       const correctAnswers = quizState.answers.filter(a => a.isCorrect).length
       const percentage = Math.round((correctAnswers / quizState.totalQuestions) * 100)
-      const passed = percentage >= resultsState.quiz.settings.passingScore
 
-      setTimeout(() => {
-        if (percentage >= 90) {
+      if (percentage >= 90) {
+        setTimeout(() => {
           playSequence([
             { sound: 'fanfare', delay: 0 },
             { sound: 'celebration', delay: 500 },
             { sound: 'achievement', delay: 1000 }
           ])
           triggerScreenEffect('celebration-confetti')
-        } else if (percentage >= 80) {
+        }, 500)
+      } else if (percentage >= 80) {
+        setTimeout(() => {
           playSequence([
             { sound: 'fanfare', delay: 0 },
             { sound: 'celebration', delay: 600 }
           ])
           triggerScreenEffect('screen-flash', { color: 'var(--success-color)' })
-        } else if (passed) {
-          playSound('gameEnd')
-        } else {
-          playSound('ding')
-        }
-      }, 500)
+        }, 500)
+      }
+      // Below 80%: no sound - main celebration comes through presenter
     }
   }, [resultsState])
 
@@ -153,10 +147,10 @@ export const ParticipantResults: React.FC = () => {
 
   // Render bingo or quiz results
   if (isBingo) {
-    return <BingoResults resultsState={resultsState} navigate={navigate} playSound={playSound} />
+    return <BingoResults resultsState={resultsState} navigate={navigate} playSound={playSound} organization={organization} />
   }
 
-  return <QuizResults resultsState={resultsState} navigate={navigate} playSound={playSound} />
+  return <QuizResults resultsState={resultsState} navigate={navigate} playSound={playSound} organization={organization} />
 }
 
 // ==================== BINGO RESULTS ====================
@@ -165,7 +159,8 @@ const BingoResults: React.FC<{
   resultsState: ResultsState
   navigate: ReturnType<typeof useNavigate>
   playSound: (sound: string) => void
-}> = ({ resultsState, navigate, playSound }) => {
+  organization: Organization | null
+}> = ({ resultsState, navigate, playSound, organization }) => {
   const { participantName, quiz, sessionCode } = resultsState
   const bingoState = resultsState.gameState as BingoGameState
 
@@ -391,41 +386,26 @@ const BingoResults: React.FC<{
               <div className="text-sm text-text-secondary">Time to BINGO</div>
             </div>
           </div>
-        </div>
 
-        {/* Achievements */}
-        {achievements.length > 0 && (
-          <div
-            className="rounded-2xl shadow-xl border p-6 mb-6"
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-              borderColor: 'var(--accent-color, rgba(251, 191, 36, 0.5))'
-            }}
-          >
-            <h3 className="font-bold text-lg mb-4 flex items-center space-x-2">
-              <span className="text-2xl">🏅</span>
-              <span>Achievements Unlocked!</span>
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Inline Achievement Badges */}
+          {achievements.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-2 mt-4">
               {achievements.map((achievement, index) => (
-                <div
+                <span
                   key={index}
-                  className="flex items-center space-x-3 p-4 rounded-xl border-2 shadow-sm transition-transform hover:scale-102"
+                  className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium"
                   style={{
-                    ...achievement.style,
-                    borderColor: achievement.style.color
+                    backgroundColor: achievement.style.backgroundColor,
+                    color: achievement.style.color as string
                   }}
                 >
-                  <span className="text-3xl">{achievement.emoji}</span>
-                  <div>
-                    <div className="font-bold">{achievement.name}</div>
-                    <div className="text-xs opacity-80">{achievement.description}</div>
-                  </div>
-                </div>
+                  <span>{achievement.emoji}</span>
+                  <span>{achievement.name}</span>
+                </span>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Leaderboard Section */}
         <LeaderboardSection resultsState={resultsState} />
@@ -484,81 +464,6 @@ const BingoResults: React.FC<{
           </div>
         </details>
 
-        {/* Performance Insights - Bingo Native */}
-        <div
-          className="rounded-2xl shadow-xl border p-6 mb-6"
-          style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            borderColor: 'var(--border-color)'
-          }}
-        >
-          <h3 className="font-bold text-lg mb-4 flex items-center space-x-2">
-            <span className="text-xl">📊</span>
-            <span>Performance Insights</span>
-          </h3>
-          <div className="space-y-3">
-            {passed && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'var(--success-light-color)' }}
-              >
-                <span className="text-2xl">🎯</span>
-                <span style={{ color: 'var(--success-color)' }}>
-                  <strong>Excellent coverage!</strong> You achieved BINGO
-                </span>
-              </div>
-            )}
-
-            {bingoState.bestStreak >= 3 && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'rgba(249, 115, 22, 0.15)' }}
-              >
-                <span className="text-2xl">🔥</span>
-                <span style={{ color: 'var(--streak-color, #f97316)' }}>
-                  <strong>Great consistency</strong> with a {bingoState.bestStreak}-cell marking streak
-                </span>
-              </div>
-            )}
-
-            {bingoState.timeToFirstBingo && bingoState.timeToFirstBingo < 180 && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'var(--primary-light-color)' }}
-              >
-                <span className="text-2xl">⚡</span>
-                <span style={{ color: 'var(--primary-color)' }}>
-                  <strong>Quick thinking</strong> — BINGO in {formatTime(bingoState.timeToFirstBingo)}
-                </span>
-              </div>
-            )}
-
-            {!passed && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'var(--warning-light-color)' }}
-              >
-                <span className="text-2xl">📚</span>
-                <span style={{ color: 'var(--warning-color)' }}>
-                  Try again for a full card — keep engaging with the training activities
-                </span>
-              </div>
-            )}
-
-            {passed && bingoState.fullCardAchieved && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'rgba(251, 191, 36, 0.2)' }}
-              >
-                <span className="text-2xl">👑</span>
-                <span style={{ color: 'var(--celebration-color, #d97706)' }}>
-                  <strong>Full card achieved!</strong> You completed every activity
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Actions */}
         <div className="space-y-3 pb-6">
           <button
@@ -594,45 +499,33 @@ ${achievements.length > 0 ? `🏅 Achievements: ${achievements.map(a => `${a.emo
             📤 Share Results
           </button>
 
-          {/* Share as Image Button */}
-          <button
-            onClick={async () => {
-              try {
+          {/* Download Attendance Certificate Button */}
+          {organization?.settings?.enableAttendanceCertificates && (
+            <button
+              onClick={async () => {
                 playSound('click')
-                await shareResultsImage({
+                const { downloadAttendanceCertificate } = await import('../lib/attendanceCertificate')
+                await downloadAttendanceCertificate({
                   participantName,
-                  quizTitle: quiz.title,
-                  percentage,
-                  correctAnswers: cellsMarked,
-                  totalQuestions: totalCells,
-                  passed,
-                  gameType: 'bingo',
-                  achievements: achievements.map(a => ({ emoji: a.emoji, name: a.name }))
+                  sessionTitle: quiz.title,
+                  completionDate: new Date(),
+                  organizationName: organization?.name,
+                  organizationLogo: organization?.branding?.logo,
+                  sessionCode,
+                  primaryColor: organization?.branding?.primaryColor,
+                  secondaryColor: organization?.branding?.secondaryColor
                 })
                 playSound('achievement')
-              } catch (error) {
-                console.error('Error sharing image:', error)
-                await downloadShareImage({
-                  participantName,
-                  quizTitle: quiz.title,
-                  percentage,
-                  correctAnswers: cellsMarked,
-                  totalQuestions: totalCells,
-                  passed,
-                  gameType: 'bingo',
-                  achievements: achievements.map(a => ({ emoji: a.emoji, name: a.name }))
-                })
-              }
-            }}
-            className="w-full py-3 px-6 rounded-xl font-medium border-2 transition-transform active:scale-95"
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
-              borderColor: 'var(--secondary-color)',
-              color: 'var(--secondary-color)'
-            }}
-          >
-            🖼️ Share as Image
-          </button>
+              }}
+              className="w-full py-4 px-6 rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95"
+              style={{
+                background: 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))',
+                color: 'white'
+              }}
+            >
+              📋 Download Attendance Certificate
+            </button>
+          )}
 
           {/* Download Certificate Button */}
           {passed && (
@@ -689,7 +582,8 @@ const QuizResults: React.FC<{
   resultsState: ResultsState
   navigate: ReturnType<typeof useNavigate>
   playSound: (sound: string) => void
-}> = ({ resultsState, navigate, playSound }) => {
+  organization: Organization | null
+}> = ({ resultsState, navigate, playSound, organization }) => {
   const { participantName, gameState, quiz, sessionCode } = resultsState
   const quizState = gameState as { score: number; streak: number; answers: any[]; totalQuestions: number }
   const correctAnswers = quizState.answers.filter(a => a.isCorrect).length
@@ -920,41 +814,26 @@ const QuizResults: React.FC<{
               <div className="text-sm text-text-secondary">Avg Time</div>
             </div>
           </div>
-        </div>
 
-        {/* Achievements */}
-        {achievements.length > 0 && (
-          <div
-            className="rounded-2xl shadow-xl border p-6 mb-6"
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-              borderColor: 'var(--accent-color, rgba(251, 191, 36, 0.5))'
-            }}
-          >
-            <h3 className="font-bold text-lg mb-4 flex items-center space-x-2">
-              <span className="text-2xl">🏅</span>
-              <span>Achievements Unlocked!</span>
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Inline Achievement Badges */}
+          {achievements.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-2 mt-4">
               {achievements.map((achievement, index) => (
-                <div
+                <span
                   key={index}
-                  className="flex items-center space-x-3 p-4 rounded-xl border-2 shadow-sm transition-transform hover:scale-102"
+                  className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium"
                   style={{
-                    ...achievement.style,
-                    borderColor: achievement.style.color
+                    backgroundColor: achievement.style.backgroundColor,
+                    color: achievement.style.color as string
                   }}
                 >
-                  <span className="text-3xl">{achievement.emoji}</span>
-                  <div>
-                    <div className="font-bold">{achievement.name}</div>
-                    <div className="text-xs opacity-80">{achievement.description}</div>
-                  </div>
-                </div>
+                  <span>{achievement.emoji}</span>
+                  <span>{achievement.name}</span>
+                </span>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Leaderboard Section */}
         <LeaderboardSection resultsState={resultsState} />
@@ -1028,81 +907,6 @@ const QuizResults: React.FC<{
           </div>
         </details>
 
-        {/* Performance Insights */}
-        <div
-          className="rounded-2xl shadow-xl border p-6 mb-6"
-          style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            borderColor: 'var(--border-color)'
-          }}
-        >
-          <h3 className="font-bold text-lg mb-4 flex items-center space-x-2">
-            <span className="text-xl">📊</span>
-            <span>Performance Insights</span>
-          </h3>
-          <div className="space-y-3">
-            {percentage >= 80 && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'var(--success-light-color)' }}
-              >
-                <span className="text-2xl">🎯</span>
-                <span style={{ color: 'var(--success-color)' }}>
-                  <strong>Strong understanding</strong> of the material
-                </span>
-              </div>
-            )}
-
-            {bestStreak >= 3 && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'rgba(249, 115, 22, 0.15)' }}
-              >
-                <span className="text-2xl">🔥</span>
-                <span style={{ color: 'var(--streak-color, #f97316)' }}>
-                  <strong>Excellent consistency</strong> with a {bestStreak}-question streak
-                </span>
-              </div>
-            )}
-
-            {averageTime <= 20 && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'var(--primary-light-color)' }}
-              >
-                <span className="text-2xl">⚡</span>
-                <span style={{ color: 'var(--primary-color)' }}>
-                  <strong>Quick thinking</strong> with {averageTime}s average response time
-                </span>
-              </div>
-            )}
-
-            {percentage < quiz.settings.passingScore && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'var(--warning-light-color)' }}
-              >
-                <span className="text-2xl">📚</span>
-                <span style={{ color: 'var(--warning-color)' }}>
-                  Consider reviewing the material and trying again to improve your score
-                </span>
-              </div>
-            )}
-
-            {percentage >= 90 && (
-              <div
-                className="flex items-center space-x-3 p-3 rounded-xl"
-                style={{ backgroundColor: 'rgba(251, 191, 36, 0.2)' }}
-              >
-                <span className="text-2xl">👑</span>
-                <span style={{ color: 'var(--celebration-color, #d97706)' }}>
-                  <strong>Outstanding performance!</strong> You have mastered this material
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Actions */}
         <div className="space-y-3 pb-6">
           <button
@@ -1137,43 +941,33 @@ ${achievements.length > 0 ? `🏅 Achievements: ${achievements.map(a => `${a.emo
             📤 Share Results
           </button>
 
-          {/* Share as Image Button */}
-          <button
-            onClick={async () => {
-              try {
+          {/* Download Attendance Certificate Button */}
+          {organization?.settings?.enableAttendanceCertificates && (
+            <button
+              onClick={async () => {
                 playSound('click')
-                await shareResultsImage({
+                const { downloadAttendanceCertificate } = await import('../lib/attendanceCertificate')
+                await downloadAttendanceCertificate({
                   participantName,
-                  quizTitle: quiz.title,
-                  percentage,
-                  correctAnswers,
-                  totalQuestions: quizState.totalQuestions,
-                  passed,
-                  achievements: achievements.map(a => ({ emoji: a.emoji, name: a.name }))
+                  sessionTitle: quiz.title,
+                  completionDate: new Date(),
+                  organizationName: organization?.name,
+                  organizationLogo: organization?.branding?.logo,
+                  sessionCode,
+                  primaryColor: organization?.branding?.primaryColor,
+                  secondaryColor: organization?.branding?.secondaryColor
                 })
                 playSound('achievement')
-              } catch (error) {
-                console.error('Error sharing image:', error)
-                await downloadShareImage({
-                  participantName,
-                  quizTitle: quiz.title,
-                  percentage,
-                  correctAnswers,
-                  totalQuestions: quizState.totalQuestions,
-                  passed,
-                  achievements: achievements.map(a => ({ emoji: a.emoji, name: a.name }))
-                })
-              }
-            }}
-            className="w-full py-3 px-6 rounded-xl font-medium border-2 transition-transform active:scale-95"
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
-              borderColor: 'var(--secondary-color)',
-              color: 'var(--secondary-color)'
-            }}
-          >
-            🖼️ Share as Image
-          </button>
+              }}
+              className="w-full py-4 px-6 rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95"
+              style={{
+                background: 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))',
+                color: 'white'
+              }}
+            >
+              📋 Download Attendance Certificate
+            </button>
+          )}
 
           {/* Download Certificate Button */}
           {passed && (
@@ -1245,13 +1039,13 @@ const LeaderboardSection: React.FC<{ resultsState: ResultsState }> = ({ resultsS
   const getMedalStyle = (rank: number): { emoji: string; bgColor: string; textColor: string } => {
     switch (rank) {
       case 1:
-        return { emoji: '🥇', bgColor: 'rgba(251, 191, 36, 0.3)', textColor: 'var(--celebration-color, #d97706)' }
+        return { emoji: '🥇', bgColor: 'rgba(251, 191, 36, 0.3)', textColor: '#92400e' }
       case 2:
-        return { emoji: '🥈', bgColor: 'rgba(156, 163, 175, 0.3)', textColor: 'var(--text-secondary-color)' }
+        return { emoji: '🥈', bgColor: 'rgba(156, 163, 175, 0.3)', textColor: '#374151' }
       case 3:
-        return { emoji: '🥉', bgColor: 'rgba(217, 119, 6, 0.3)', textColor: 'var(--warning-color)' }
+        return { emoji: '🥉', bgColor: 'rgba(217, 119, 6, 0.3)', textColor: '#92400e' }
       default:
-        return { emoji: '', bgColor: 'var(--surface-color)', textColor: 'var(--text-color)' }
+        return { emoji: '', bgColor: '#f9fafb', textColor: '#1f2937' }
     }
   }
 
@@ -1273,18 +1067,18 @@ const LeaderboardSection: React.FC<{ resultsState: ResultsState }> = ({ resultsS
         <div
           className="p-4 rounded-xl mb-4 text-center border-2"
           style={{
-            backgroundColor: myRank <= 3 ? getMedalStyle(myRank).bgColor : 'var(--primary-light-color)',
-            borderColor: myRank <= 3 ? getMedalStyle(myRank).textColor : 'var(--primary-color)'
+            backgroundColor: myRank <= 3 ? getMedalStyle(myRank).bgColor : '#dbeafe',
+            borderColor: myRank <= 3 ? getMedalStyle(myRank).textColor : '#3b82f6'
           }}
         >
-          <div className="text-3xl font-bold mb-1" style={{ color: myRank <= 3 ? getMedalStyle(myRank).textColor : 'var(--primary-color)' }}>
+          <div className="text-3xl font-bold mb-1" style={{ color: myRank <= 3 ? getMedalStyle(myRank).textColor : '#1e40af' }}>
             {myRank <= 3 ? getMedalStyle(myRank).emoji : ''} #{myRank}
           </div>
-          <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
+          <p className="text-sm" style={{ color: '#4b5563' }}>
             out of {totalParticipants} participants
           </p>
           {beatPercentage > 0 && (
-            <p className="text-sm font-medium mt-1" style={{ color: 'var(--success-color)' }}>
+            <p className="text-sm font-medium mt-1" style={{ color: '#166534' }}>
               You beat {beatPercentage}% of participants!
             </p>
           )}
@@ -1334,26 +1128,26 @@ const LeaderboardSection: React.FC<{ resultsState: ResultsState }> = ({ resultsS
         {/* Show current user if not in top 5 */}
         {myRank > 5 && (
           <>
-            <div className="text-center py-2 text-text-secondary">• • •</div>
+            <div className="text-center py-2" style={{ color: '#6b7280' }}>• • •</div>
             <div
               className="flex items-center justify-between p-3 rounded-xl ring-2 ring-offset-1"
               style={{
-                backgroundColor: 'var(--primary-light-color)',
-                ringColor: 'var(--primary-color)'
+                backgroundColor: '#dbeafe',
+                ringColor: '#3b82f6'
               }}
             >
               <div className="flex items-center space-x-3">
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm"
-                  style={{ backgroundColor: 'var(--primary-color)', color: 'white' }}
+                  style={{ backgroundColor: '#3b82f6', color: 'white' }}
                 >
                   {myRank}
                 </div>
-                <span className="font-medium text-primary">
+                <span className="font-medium" style={{ color: '#1e40af' }}>
                   {participantName} (You)
                 </span>
               </div>
-              <span className="font-bold" style={{ color: 'var(--primary-color)' }}>
+              <span className="font-bold" style={{ color: '#1e40af' }}>
                 {gameState.score} pts
               </span>
             </div>
