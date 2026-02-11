@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react'
-import { useGameSounds } from '../lib/soundSystem'
 import { useVisualEffects } from '../lib/visualEffects'
 
 interface CountdownOverlayProps {
@@ -18,31 +17,25 @@ export const CountdownOverlay: React.FC<CountdownOverlayProps> = ({
   const [count, setCount] = useState(startFrom)
   const [showGo, setShowGo] = useState(false)
 
-  const { playSound } = useGameSounds(true)
   const { triggerScreenEffect } = useVisualEffects()
 
   useEffect(() => {
-    // Play initial sound
-    playSound('tick')
+    // Countdown sounds play on presenter only (through training room speakers)
+    // Participant devices show visual countdown silently
 
     const timer = setInterval(() => {
       setCount(prev => {
         if (prev <= 1) {
           clearInterval(timer)
-          // Show "GO!" message
           setShowGo(true)
-          playSound('gameStart')
           triggerScreenEffect('screen-flash', { color: 'var(--success-color)' })
 
-          // Call onComplete after GO animation
           setTimeout(() => {
             onComplete()
           }, 800)
           return 0
         }
 
-        // Play tick sound for each count
-        playSound('tick')
         return prev - 1
       })
     }, 1000)

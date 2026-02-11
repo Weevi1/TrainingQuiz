@@ -147,6 +147,9 @@ function App() {
               <Route path="/play/:sessionCode" element={<PlaySession />} />
               <Route path="/results" element={<ParticipantResults />} />
 
+              {/* Debug route - presenter results with mock data, no auth */}
+              <Route path="/debug/results" element={<SessionControl />} />
+
               {/* Default redirect */}
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
 

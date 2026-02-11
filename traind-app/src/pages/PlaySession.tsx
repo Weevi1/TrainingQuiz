@@ -4,7 +4,6 @@ import { Clock, Users, Star, Zap, Target, Trophy, CheckCircle, XCircle, AlertTri
 import { FirestoreService, type GameSession, type Quiz, type Question, type Participant, type Organization } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { GameDispatcher } from '../components/gameModules/GameDispatcher'
-import { CountdownOverlay } from '../components/CountdownOverlay'
 import { type ModuleType } from '../lib/permissions'
 import { soundSystem } from '../lib/soundSystem'
 import { SoundControl } from '../components/SoundControl'
@@ -47,6 +46,11 @@ export const PlaySession: React.FC = () => {
   const [participantId, setParticipantId] = useState<string | null>(sessionState?.participantId || null)
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [participantCount, setParticipantCount] = useState(0)
+
+  // Pre-cache quiz data during waiting room for instant start
+  const quizCacheRef = useRef<Quiz | null>(null)
+  // Ref to track gameData for stale closure prevention in subscription
+  const gameDataRef = useRef<any>(null)
 
   // Session recovery - check for saved session
   useEffect(() => {
@@ -101,6 +105,11 @@ export const PlaySession: React.FC = () => {
     loadSessionData()
   }, [])
 
+  // Keep gameDataRef in sync with state (prevents stale closure in subscription)
+  useEffect(() => {
+    gameDataRef.current = gameData
+  }, [gameData])
+
   // Subscribe to session status changes
   useEffect(() => {
     if (!sessionState?.sessionId) return
@@ -111,8 +120,8 @@ export const PlaySession: React.FC = () => {
         if (updatedSession) {
           setSession(updatedSession)
 
-          // If session just became active, load quiz data
-          if (updatedSession.status === 'active' && !gameData) {
+          // If session just became active, load quiz data (use ref to avoid stale closure)
+          if (updatedSession.status === 'active' && !gameDataRef.current) {
             loadQuizData(updatedSession)
           }
         }
@@ -163,6 +172,22 @@ export const PlaySession: React.FC = () => {
         console.error('Error loading organization:', error)
       }
 
+      // Pre-fetch quiz data while in waiting room (instant start when session goes active)
+      if (realSession.status === 'waiting' || realSession.status === 'countdown') {
+        const quizId = realSession.gameData?.quizId
+        if (quizId) {
+          try {
+            const cachedQuiz = await FirestoreService.getQuiz(realSession.organizationId, quizId)
+            if (cachedQuiz) {
+              quizCacheRef.current = cachedQuiz
+            }
+          } catch (error) {
+            // Non-critical — will fetch on demand when session starts
+            console.warn('Quiz pre-fetch failed, will retry on start:', error)
+          }
+        }
+      }
+
       // If session is active, load quiz data immediately
       if (realSession.status === 'active') {
         await loadQuizData(realSession)
@@ -177,21 +202,21 @@ export const PlaySession: React.FC = () => {
 
   const loadQuizData = async (currentSession: GameSession) => {
     try {
-      // Fetch real quiz data from Firestore
       const quizId = currentSession.gameData?.quizId
       if (!quizId) {
         console.error('No quiz ID found in session')
         return
       }
 
-      const realQuiz = await FirestoreService.getQuiz(currentSession.organizationId, quizId)
+      // Use pre-cached quiz if available (fetched during waiting room), otherwise fetch from network
+      const realQuiz = quizCacheRef.current || await FirestoreService.getQuiz(currentSession.organizationId, quizId)
 
       if (!realQuiz) {
         console.error('Quiz not found:', quizId)
         return
       }
 
-      // Fetch participants for live engagement
+      // Fetch fresh participant snapshot for game start
       const participants = await FirestoreService.getSessionParticipants(currentSession.id)
 
       setGameData({
@@ -232,6 +257,7 @@ export const PlaySession: React.FC = () => {
         score,
         sessionCode,
         organizationId: session?.organizationId,
+        sessionId: sessionState.sessionId,
         // Full game state for detailed results
         gameState: isBingo
           ? additionalData.gameState
@@ -268,18 +294,49 @@ export const PlaySession: React.FC = () => {
     )
   }
 
-  // Countdown state - show countdown overlay before quiz starts
+  // Countdown state - show "Get Ready" on participant phones
+  // The actual 3-2-1-GO countdown plays on the presenter screen (SessionControl)
+  // Phones just show anticipation state until Firestore status changes to 'active'
   if (session && session.status === 'countdown') {
     return (
-      <CountdownOverlay
-        onComplete={() => {
-          // The session will automatically update to 'active' from the subscription
-          // This callback is just for any local state updates if needed
-        }}
-        startFrom={3}
-        organizationLogo={(organization?.branding as any)?.logoUrl}
-        sessionTitle={session.title}
-      />
+      <div className="fixed inset-0 flex items-center justify-center z-50"
+        style={{ background: 'linear-gradient(135deg, var(--primary-dark-color, #1e3a8a), var(--secondary-color, #1e40af), var(--primary-color, #3b82f6))' }}>
+
+        {/* Background blurs (consistent with waiting room) */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full blur-3xl opacity-30 animate-pulse"
+            style={{ backgroundColor: 'var(--accent-color, #f59e0b)' }} />
+          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 rounded-full blur-3xl opacity-30 animate-pulse"
+            style={{ backgroundColor: 'var(--primary-light-color, #60a5fa)', animationDelay: '0.5s' }} />
+        </div>
+
+        <div className="text-center relative z-10">
+          {/* Org logo */}
+          {organization?.branding?.logoUrl && (
+            <img src={organization.branding.logoUrl} alt="" className="h-16 mx-auto mb-6 object-contain" />
+          )}
+
+          {/* Session title */}
+          <h2 className="text-2xl md:text-3xl font-bold mb-8 text-white opacity-80">
+            {session.title}
+          </h2>
+
+          {/* "Get Ready" with pulsing animation */}
+          <div className="text-5xl md:text-7xl font-black text-white animate-pulse"
+            style={{ textShadow: '0 0 40px rgba(255,255,255,0.5)' }}>
+            Get Ready!
+          </div>
+
+          {/* Animated pulse rings */}
+          <div className="mt-8 flex justify-center">
+            <div className="relative w-16 h-16">
+              <div className="absolute inset-0 rounded-full border-4 border-white/30 animate-ping" />
+              <div className="absolute inset-2 rounded-full border-4 border-white/50 animate-ping" style={{ animationDelay: '0.3s' }} />
+              <div className="absolute inset-4 rounded-full bg-white/20 animate-pulse" />
+            </div>
+          </div>
+        </div>
+      </div>
     )
   }
 
@@ -342,7 +399,7 @@ export const PlaySession: React.FC = () => {
             <h2 className="text-lg font-bold mb-2" style={{ color: 'var(--primary-color)' }}>
               {session.title}
             </h2>
-            <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
+            <p className="text-base" style={{ color: 'var(--text-secondary-color)' }}>
               Session Code: <span className="font-mono font-bold">{session.code}</span>
             </p>
           </div>
@@ -365,7 +422,7 @@ export const PlaySession: React.FC = () => {
                 Waiting for trainer...
               </span>
             </div>
-            <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
+            <p className="text-base" style={{ color: 'var(--text-secondary-color)' }}>
               The quiz will start when your trainer is ready.
               <br />Stay on this page!
             </p>
@@ -449,6 +506,7 @@ export const PlaySession: React.FC = () => {
     sessionState={sessionState}
     onGameComplete={handleGameComplete}
     participantId={participantId || ''}
+    organization={organization}
   />
 }
 
@@ -459,13 +517,16 @@ const LegacyQuizGame: React.FC<{
   sessionState: SessionState
   onGameComplete: (score: number, additionalData?: any) => void
   participantId: string
-}> = ({ session, gameData, sessionState, onGameComplete, participantId }) => {
+  organization: Organization | null
+}> = ({ session, gameData, sessionState, onGameComplete, participantId, organization }) => {
   const navigate = useNavigate()
   const quiz = gameData.quiz as Quiz
+  // Session time limit: prefer the value written by presenter to Firestore, fall back to calculation
+  const initialSessionTimeLimit = (session as any)?.sessionTimeLimit || quiz.timeLimit * quiz.questions.length
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(quiz.questions[0])
   const [gameState, setGameState] = useState<GameState>({
     currentQuestionIndex: 0,
-    timeRemaining: quiz.timeLimit,
+    timeRemaining: initialSessionTimeLimit,
     totalQuestions: quiz.questions.length,
     score: 0,
     streak: 0,
@@ -475,7 +536,6 @@ const LegacyQuizGame: React.FC<{
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)
   const [answerSubmitted, setAnswerSubmitted] = useState(false)
   const [showResult, setShowResult] = useState(false)
-  const [resultCountdown, setResultCountdown] = useState(0)
   const [sessionEnded, setSessionEnded] = useState(false)
   const [isKicked, setIsKicked] = useState(false)
   const [answerLocked, setAnswerLocked] = useState(false)
@@ -491,6 +551,15 @@ const LegacyQuizGame: React.FC<{
   const gameStateRef = useRef(gameState)
   const currentQuestionRef = useRef(currentQuestion)
   const sessionEndedRef = useRef(false)
+  // Anchor-based session timer: reads from Firestore session, syncs with presenter
+  const sessionTimerAnchorRef = useRef<number>(
+    (session as any)?.timerStartedAt || Date.now()
+  )
+  const sessionTimeLimitRef = useRef<number>(initialSessionTimeLimit)
+  const timerPausedRef = useRef(false)
+  const pausedRemainingRef = useRef(0)
+  // Track when each question started (for per-question time spent stats only, not for timer display)
+  const questionStartTimeRef = useRef<number>(Date.now())
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -540,7 +609,7 @@ const LegacyQuizGame: React.FC<{
     return () => unsubscribe()
   }, [sessionState.sessionId, participantId, navigate])
 
-  // Timer sync - mirror trainer's authoritative timer
+  // Subscribe to session status changes (detect session end and timer pause/resume by trainer)
   useEffect(() => {
     if (!sessionState.sessionId || sessionEndedRef.current) return
 
@@ -549,42 +618,35 @@ const LegacyQuizGame: React.FC<{
       (updatedSession) => {
         if (!updatedSession || sessionEndedRef.current) return
 
-        // Sync timer from trainer's broadcast
-        if (updatedSession.currentTimeRemaining !== undefined) {
-          setGameState(prev => ({
-            ...prev,
-            timeRemaining: updatedSession.currentTimeRemaining!
-          }))
-        }
-
-        // Sync question index if trainer advances
-        if (updatedSession.currentQuestionIndex !== undefined &&
-            updatedSession.currentQuestionIndex !== gameStateRef.current.currentQuestionIndex) {
-          const newIndex = updatedSession.currentQuestionIndex
-          if (newIndex < quiz.questions.length) {
-            setCurrentQuestion(quiz.questions[newIndex])
-            setGameState(prev => ({
-              ...prev,
-              currentQuestionIndex: newIndex,
-              timeRemaining: quiz.timeLimit
-            }))
-            setSelectedAnswer(null)
-            setAnswerSubmitted(false)
-            setAnswerLocked(false)
-            setShowResult(false)
-          }
-        }
-
-        // Check if session ended
+        // Check if session ended by trainer
         if (updatedSession.status === 'completed' && !sessionEndedRef.current) {
           setSessionEnded(true)
           showFinalResults()
+        }
+
+        // Sync session timer anchor and limit from Firestore (source of truth)
+        if (updatedSession.timerStartedAt) {
+          sessionTimerAnchorRef.current = updatedSession.timerStartedAt
+        }
+        if (updatedSession.sessionTimeLimit) {
+          sessionTimeLimitRef.current = updatedSession.sessionTimeLimit
+        }
+
+        // Sync timer pause/resume from presenter
+        if (updatedSession.timerPaused && !timerPausedRef.current) {
+          // Presenter paused - use paused remaining from Firestore if available
+          timerPausedRef.current = true
+          pausedRemainingRef.current = updatedSession.pausedTimeRemaining
+            || Math.max(0, sessionTimeLimitRef.current - Math.floor((Date.now() - sessionTimerAnchorRef.current) / 1000))
+        } else if (!updatedSession.timerPaused && timerPausedRef.current) {
+          // Presenter resumed - anchor already updated above from Firestore
+          timerPausedRef.current = false
         }
       }
     )
 
     return () => unsubscribe()
-  }, [sessionState.sessionId, quiz.questions, quiz.timeLimit])
+  }, [sessionState.sessionId])
 
   // Live stats - subscribe to participants for ranking
   useEffect(() => {
@@ -633,47 +695,53 @@ const LegacyQuizGame: React.FC<{
     return () => clearInterval(saveInterval)
   }, [sessionState, participantId, session.code])
 
-  // Timer effect with auto-submit using refs for reliability
+  // Session-level timer - anchor-based calculation (syncs with presenter's single countdown)
+  // Reads anchor and limit from refs which are kept in sync with Firestore
   useEffect(() => {
-    if (!answerSubmitted && !sessionEnded && gameState.timeRemaining > 0) {
+    if (!sessionEnded && gameState.timeRemaining > 0) {
       const timer = setInterval(() => {
-        setGameState(prev => {
-          const newTime = prev.timeRemaining - 1
+        // If presenter paused, hold current time
+        if (timerPausedRef.current) {
+          setGameState(prev => ({ ...prev, timeRemaining: pausedRemainingRef.current }))
+          return
+        }
 
-          // Auto-submit when time runs out - use refs to avoid stale closure
-          if (newTime <= 0 && !answerSubmittedRef.current && !sessionEndedRef.current) {
-            // Use setTimeout to avoid state update during render
+        const elapsed = Math.floor((Date.now() - sessionTimerAnchorRef.current) / 1000)
+        const remaining = Math.max(0, sessionTimeLimitRef.current - elapsed)
+
+        setGameState(prev => {
+          // Session time expired - end the game
+          if (remaining <= 0 && !sessionEndedRef.current) {
             setTimeout(() => {
-              if (!answerSubmittedRef.current) {
-                submitAnswer(selectedAnswerRef.current, true)
-              }
+              setSessionEnded(true)
+              sessionEndedRef.current = true
+              showFinalResults()
             }, 0)
           }
 
-          return { ...prev, timeRemaining: newTime }
+          return { ...prev, timeRemaining: remaining }
         })
       }, 1000)
 
       return () => clearInterval(timer)
     }
-  }, [answerSubmitted, sessionEnded])
+  }, [sessionEnded])
 
   // Handle answer selection with locking
   const handleAnswerSelect = useCallback((index: number) => {
     if (answerSubmitted || answerLocked) return
 
     setSelectedAnswer(index)
-    soundSystem.play('select')
 
     // Lock answer after 300ms delay (prevents accidental double-taps)
     setAnswerLocked(true)
 
-    // Auto-submit after a brief lock period (1500ms for review, then submit)
+    // Auto-submit after brief lock (500ms prevents accidental double-taps)
     setTimeout(() => {
       if (!answerSubmittedRef.current) {
         submitAnswer(index)
       }
-    }, 1500)
+    }, 500)
   }, [answerSubmitted, answerLocked])
 
   const submitAnswer = async (answerIndex: number | null, autoSubmit = false) => {
@@ -685,16 +753,12 @@ const LegacyQuizGame: React.FC<{
 
     const question = currentQuestionRef.current
     const state = gameStateRef.current
-    const timeSpent = quiz.timeLimit - state.timeRemaining
+    const timeSpent = Math.floor((Date.now() - questionStartTimeRef.current) / 1000)
     const isCorrect = answerIndex === question.correctAnswer
 
-    // Play sound effect based on answer result
+    // Play sound effect based on answer result (phone only gets correct/incorrect)
     if (isCorrect) {
       soundSystem.play('correct')
-      // Play streak sound if on a streak
-      if (state.streak >= 2) {
-        setTimeout(() => soundSystem.play('streak'), 300)
-      }
     } else {
       soundSystem.play('incorrect')
     }
@@ -704,7 +768,6 @@ const LegacyQuizGame: React.FC<{
       selectedAnswer: answerIndex ?? -1,
       isCorrect,
       timeSpent,
-      confidence: undefined
     }
 
     const newScore = state.score + (isCorrect ? 100 : 0)
@@ -718,7 +781,7 @@ const LegacyQuizGame: React.FC<{
       answers: [...prev.answers, answerRecord]
     }))
 
-    // Persist answer to Firestore
+    // Persist answer to Firestore (independent try/catches so one failure doesn't block the other)
     try {
       await FirestoreService.submitAnswer(
         sessionState.sessionId,
@@ -732,8 +795,12 @@ const LegacyQuizGame: React.FC<{
           participantName: sessionState.participantName
         }
       )
+    } catch (error) {
+      console.error('Error persisting answer to answers collection:', error)
+    }
 
-      // Update participant game state
+    // Update participant game state (critical for presenter to show scores)
+    try {
       await FirestoreService.updateParticipantGameState(
         sessionState.sessionId,
         participantId,
@@ -745,28 +812,15 @@ const LegacyQuizGame: React.FC<{
         }
       )
     } catch (error) {
-      console.error('Error persisting answer:', error)
+      console.error('Error updating participant game state:', error)
     }
 
-    // Show result for 3.5 seconds (extended for better readability)
+    // Show result briefly (1.5s — enough to register correct/incorrect, keeps pace snappy)
     setShowResult(true)
-    setResultCountdown(3)
-
-    // Countdown timer
-    const countdownInterval = setInterval(() => {
-      setResultCountdown(prev => {
-        if (prev <= 1) {
-          clearInterval(countdownInterval)
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
 
     setTimeout(() => {
-      clearInterval(countdownInterval)
       nextQuestion()
-    }, 3500)
+    }, 1500)
   }
 
   const nextQuestion = () => {
@@ -782,12 +836,12 @@ const LegacyQuizGame: React.FC<{
       return
     }
 
-    // Move to next question
+    // Move to next question - track question start time for stats (session timer continues)
+    questionStartTimeRef.current = Date.now()
     setCurrentQuestion(quiz.questions[nextIndex])
     setGameState(prev => ({
       ...prev,
-      currentQuestionIndex: nextIndex,
-      timeRemaining: quiz.timeLimit
+      currentQuestionIndex: nextIndex
     }))
 
     // Reset answer state
@@ -801,9 +855,7 @@ const LegacyQuizGame: React.FC<{
   const showFinalResults = async () => {
     const state = gameStateRef.current
 
-    // Play celebration sound
-    soundSystem.play('celebration')
-    setTimeout(() => soundSystem.play('gameEnd'), 500)
+    // Celebration sounds play on results page for award winners only
 
     // Calculate total time spent
     const totalTime = state.answers.reduce((sum, a) => sum + a.timeSpent, 0)
@@ -884,12 +936,12 @@ const LegacyQuizGame: React.FC<{
             style={{ backgroundColor: 'var(--error-light-color)', borderColor: 'var(--error-color)' }}
           >
             <p className="font-medium mb-2" style={{ color: 'var(--error-color)' }}>Session Ended</p>
-            <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
+            <p className="text-base" style={{ color: 'var(--text-secondary-color)' }}>
               You have been removed from the training session by the trainer.
             </p>
           </div>
           <div className="p-4 rounded-xl" style={{ backgroundColor: 'var(--surface-color)' }}>
-            <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>Redirecting...</p>
+            <p className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Redirecting...</p>
             <div className="w-2 h-2 rounded-full animate-pulse mx-auto mt-2" style={{ backgroundColor: 'var(--primary-color)' }} />
           </div>
         </div>
@@ -952,7 +1004,7 @@ const LegacyQuizGame: React.FC<{
             </p>
             <div className="flex items-center justify-center gap-2">
               <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--success-color)' }} />
-              <span className="text-sm font-medium" style={{ color: 'var(--success-color)' }}>Submitted</span>
+              <span className="text-base font-medium" style={{ color: 'var(--success-color)' }}>Submitted</span>
             </div>
           </div>
 
@@ -993,7 +1045,7 @@ const LegacyQuizGame: React.FC<{
 
           {/* Processing indicator */}
           <div className="p-4 rounded-xl" style={{ backgroundColor: 'var(--surface-color)' }}>
-            <p className="text-sm mb-2" style={{ color: 'var(--text-secondary-color)' }}>
+            <p className="text-base mb-2" style={{ color: 'var(--text-secondary-color)' }}>
               Processing results...
             </p>
             <LoadingSpinner size="sm" />
@@ -1031,65 +1083,114 @@ const LegacyQuizGame: React.FC<{
         <div className="absolute bottom-0 right-1/4 w-64 h-64 rounded-full blur-3xl opacity-5" style={{ backgroundColor: 'var(--secondary-color)' }} />
       </div>
 
-      {/* Mobile-optimized header */}
+      {/* Polished mobile header */}
       <header
-        className="relative z-10 shadow-lg border-b-2"
+        className="relative z-10 shadow-xl overflow-hidden"
         style={{
-          backgroundColor: 'var(--primary-dark-color, #1e3a8a)',
-          borderColor: 'var(--primary-color)'
+          background: `linear-gradient(135deg, var(--primary-dark-color, #1e3a8a) 0%, var(--secondary-color, #1e40af) 50%, var(--primary-dark-color, #1e3a8a) 100%)`
         }}
       >
-        <div className="px-4 py-4">
-          {/* Main row: Quiz title and Timer */}
-          <div className="flex items-center justify-between">
-            <h1
-              className="text-lg font-bold flex-1 truncate"
-              style={{ color: 'var(--text-on-primary-color, white)' }}
-            >
-              {session.title || 'Quiz'}
-            </h1>
+        {/* Subtle decorative glow */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full blur-2xl opacity-20"
+            style={{ backgroundColor: 'var(--accent-color, #fbbf24)' }} />
+          <div className="absolute -bottom-4 -left-4 w-24 h-24 rounded-full blur-2xl opacity-15"
+            style={{ backgroundColor: 'var(--primary-light-color, #60a5fa)' }} />
+        </div>
 
-            {/* Clear Timer */}
+        {/* Bottom accent line */}
+        <div className="absolute bottom-0 left-0 right-0 h-[3px]"
+          style={{ background: `linear-gradient(90deg, transparent, var(--accent-color, #fbbf24), transparent)` }} />
+
+        <div className="relative px-4 py-3">
+          {/* Top row: Logo/Title and Timer */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              {organization?.branding?.logoUrl && (
+                <img
+                  src={organization.branding.logoUrl}
+                  alt=""
+                  className="h-8 w-8 rounded-md object-contain flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}
+                />
+              )}
+              <h1
+                className="text-base font-bold flex-1 truncate"
+                style={{ color: 'var(--text-on-primary-color, white)' }}
+              >
+                {session.title || 'Quiz'}
+              </h1>
+            </div>
+
+            {/* Timer badge */}
             <div
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg font-mono font-bold ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold text-sm shadow-md ${
                 gameState.timeRemaining <= 30 ? 'animate-pulse' : ''
               }`}
               style={{
-                backgroundColor: gameState.timeRemaining <= 30 ? 'var(--error-color)' : 'var(--accent-color, #fbbf24)',
-                color: gameState.timeRemaining <= 30 ? 'white' : 'var(--primary-dark-color, #1e3a8a)'
+                backgroundColor: gameState.timeRemaining <= 30 ? 'var(--error-color)' : 'rgba(255,255,255,0.15)',
+                color: gameState.timeRemaining <= 30 ? 'white' : 'var(--text-on-primary-color, white)',
+                backdropFilter: gameState.timeRemaining <= 30 ? 'none' : 'blur(8px)',
+                border: `1px solid ${gameState.timeRemaining <= 30 ? 'var(--error-color)' : 'rgba(255,255,255,0.2)'}`
               }}
             >
-              <Clock size={16} />
+              <Clock size={14} />
               <span>{formatTime(Math.max(0, gameState.timeRemaining))}</span>
             </div>
           </div>
 
-          {/* Secondary info row */}
-          <div className="flex items-center justify-between mt-2 text-sm" style={{ color: 'var(--text-on-primary-color, rgba(255,255,255,0.9))' }}>
-            <div className="font-medium">
-              {sessionState.participantName}
-              {currentRank && (
-                <span
-                  className="ml-2 px-2 py-0.5 rounded text-xs font-bold"
+          {/* Bottom row: Participant info chips */}
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-2">
+              {/* Name + rank chip */}
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium"
+                style={{
+                  backgroundColor: 'rgba(255,255,255,0.12)',
+                  color: 'var(--text-on-primary-color, white)',
+                  border: '1px solid rgba(255,255,255,0.15)'
+                }}
+              >
+                <span>{sessionState.participantName}</span>
+                {currentRank && (
+                  <span
+                    className="px-1.5 py-0.5 rounded-full text-xs font-bold -mr-1"
+                    style={{
+                      backgroundColor: currentRank <= 3 ? 'var(--gold-color, #fbbf24)' : 'rgba(255,255,255,0.25)',
+                      color: currentRank <= 3 ? '#000' : 'white'
+                    }}
+                  >
+                    #{currentRank}
+                  </span>
+                )}
+              </div>
+
+              {/* Streak chip */}
+              {gameState.streak > 1 && (
+                <div
+                  className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-bold"
                   style={{
-                    backgroundColor: currentRank <= 3 ? 'var(--gold-color, #fbbf24)' : 'rgba(255,255,255,0.2)',
-                    color: currentRank <= 3 ? '#000' : 'white'
+                    backgroundColor: 'var(--streak-color, #f97316)',
+                    color: 'white',
+                    boxShadow: '0 0 8px rgba(249, 115, 22, 0.4)'
                   }}
                 >
-                  #{currentRank}
-                </span>
+                  <Zap size={12} /> {gameState.streak}
+                </div>
               )}
             </div>
-            <div className="flex items-center gap-3" style={{ color: 'var(--text-on-primary-color, rgba(255,255,255,0.8))' }}>
-              <span>{participantCount} participants</span>
-              {gameState.streak > 0 && (
-                <span
-                  className="flex items-center gap-1 px-2 py-0.5 rounded animate-pulse"
-                  style={{ backgroundColor: 'var(--streak-color, #f97316)', color: 'white' }}
-                >
-                  <Zap size={12} /> {gameState.streak}
-                </span>
-              )}
+
+            {/* Participants chip */}
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm"
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.08)',
+                color: 'rgba(255,255,255,0.75)',
+                border: '1px solid rgba(255,255,255,0.1)'
+              }}
+            >
+              <Users size={13} />
+              <span>{participantCount} {participantCount === 1 ? 'player' : 'players'}</span>
             </div>
           </div>
         </div>
@@ -1246,7 +1347,7 @@ const LegacyQuizGame: React.FC<{
             <p className="font-bold" style={{ color: 'var(--text-color)' }}>
               Select your answer to continue
             </p>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary-color)' }}>
+            <p className="text-base mt-1" style={{ color: 'var(--text-secondary-color)' }}>
               Quiz will automatically advance to the next question
             </p>
           </div>
@@ -1269,35 +1370,36 @@ const LegacyQuizGame: React.FC<{
             className="mt-4 p-4 rounded-xl border"
             style={{ backgroundColor: 'var(--info-light-color, #dbeafe)', borderColor: 'var(--info-color, #3b82f6)' }}
           >
-            <p className="text-sm" style={{ color: 'var(--info-color, #1d4ed8)' }}>
+            <p className="text-base" style={{ color: 'var(--info-color, #1d4ed8)' }}>
               <strong>Explanation:</strong> {currentQuestion.explanation}
             </p>
           </div>
         )}
       </main>
 
-      {/* Full-screen answer feedback overlay */}
+      {/* Quick answer feedback overlay */}
       {showResult && (
         <div
-          className="fixed inset-0 flex items-center justify-center z-50"
-          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+          className="fixed inset-0 flex items-center justify-center z-50 animate-fade-in"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
         >
           <div
-            className="text-center p-8 rounded-2xl border-4 max-w-sm mx-4 animate-fade-in"
+            className="text-center p-6 rounded-2xl border-4 max-w-xs mx-4"
             style={{
               backgroundColor: selectedAnswer === currentQuestion.correctAnswer
                 ? 'var(--success-light-color)'
                 : 'var(--error-light-color)',
               borderColor: selectedAnswer === currentQuestion.correctAnswer
                 ? 'var(--success-color)'
-                : 'var(--error-color)'
+                : 'var(--error-color)',
+              animation: 'scale-in 0.2s ease-out'
             }}
           >
-            <div className="text-6xl mb-4">
+            <div className="text-5xl mb-2">
               {selectedAnswer === currentQuestion.correctAnswer ? '✓' : '✗'}
             </div>
             <h2
-              className="text-3xl font-bold mb-2"
+              className="text-2xl font-bold"
               style={{
                 color: selectedAnswer === currentQuestion.correctAnswer
                   ? 'var(--success-color)'
@@ -1306,21 +1408,14 @@ const LegacyQuizGame: React.FC<{
             >
               {selectedAnswer === currentQuestion.correctAnswer ? 'Correct!' : 'Incorrect'}
             </h2>
-            {selectedAnswer === currentQuestion.correctAnswer && gameState.streak > 0 && (
+            {selectedAnswer === currentQuestion.correctAnswer && gameState.streak > 1 && (
               <p
-                className="text-lg font-bold flex items-center justify-center gap-2"
+                className="text-base font-bold flex items-center justify-center gap-1 mt-1"
                 style={{ color: 'var(--streak-color, #f97316)' }}
               >
-                <Zap size={20} /> Streak: {gameState.streak}
+                <Zap size={16} /> {gameState.streak} streak
               </p>
             )}
-            {/* Countdown to next question */}
-            <p
-              className="text-sm mt-4 opacity-75"
-              style={{ color: 'var(--text-secondary-color)' }}
-            >
-              Next question in {resultCountdown}...
-            </p>
           </div>
         </div>
       )}

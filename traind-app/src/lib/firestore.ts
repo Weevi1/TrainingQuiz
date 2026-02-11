@@ -76,6 +76,11 @@ export type OrganizationBranding = {
 
   // NEW: Visual effects configuration
   effects?: ThemeEffects
+
+  // Certificate signature
+  signatureUrl?: string
+  signerName?: string    // e.g. "John Smith"
+  signerTitle?: string   // e.g. "Training Manager"
 }
 
 export type Organization = {
@@ -102,6 +107,7 @@ export type Organization = {
     emailNotifications: boolean
     ssoEnabled: boolean
     customDomain?: string
+    enableAttendanceCertificates?: boolean
   }
   createdAt: Date
   updatedAt: Date
@@ -124,8 +130,12 @@ export type GameSession = {
     enableSounds: boolean
     recordSession: boolean
   }
-  // Timer broadcaster fields (trainer is authoritative)
-  currentTimeRemaining?: number
+  // Timer sync fields (presenter is authoritative)
+  timerStartedAt?: number        // Date.now() anchor when timer started (ms)
+  sessionTimeLimit?: number      // Total session time in seconds
+  timerPaused?: boolean          // Whether timer is currently paused
+  pausedTimeRemaining?: number   // Seconds remaining when paused
+  currentTimeRemaining?: number  // Legacy: current remaining seconds
   currentQuestionIndex?: number
   lastTimerUpdate?: Date
   startTime?: Date

@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Trained by FIFO — Employee Training That Sticks</title>
+  <meta name="description" content="Keep employees engaged long after the training ends. Video content, interactive quizzes, progress tracking, and engagement analytics — training that sticks." />
+  <meta name="theme-color" content="#0f172a" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/trained-icon.svg" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+          colors: {
+            brand: {
+              400: '#4ade80',
+              500: '#22c55e',
+              600: '#16a34a',
+              700: '#15803d',
+            },
+            surface: {
+              900: '#0f172a',
+              800: '#1e293b',
+              700: '#334155',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .reveal {
+      opacity: 0;
+      transform: translateY(32px);
+      transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .reveal-delay-1 { transition-delay: 0.1s; }
+    .reveal-delay-2 { transition-delay: 0.2s; }
+    .reveal-delay-3 { transition-delay: 0.3s; }
+    .reveal-delay-4 { transition-delay: 0.4s; }
+    .reveal-delay-5 { transition-delay: 0.5s; }
+
+    .hero-stagger {
+      opacity: 0;
+      transform: translateY(24px);
+      animation: heroIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .hero-stagger:nth-child(1) { animation-delay: 0.1s; }
+    .hero-stagger:nth-child(2) { animation-delay: 0.25s; }
+    .hero-stagger:nth-child(3) { animation-delay: 0.4s; }
+    .hero-stagger:nth-child(4) { animation-delay: 0.55s; }
+    .hero-stagger:nth-child(5) { animation-delay: 0.7s; }
+
+    @keyframes heroIn {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(80px);
+      opacity: 0.15;
+      animation: float 20s ease-in-out infinite;
+    }
+    .orb-1 { width: 400px; height: 400px; background: #22c55e; top: -100px; left: -100px; animation-delay: 0s; }
+    .orb-2 { width: 300px; height: 300px; background: #16a34a; bottom: -50px; right: -50px; animation-delay: -7s; }
+    .orb-3 { width: 250px; height: 250px; background: #4ade80; top: 50%; left: 60%; animation-delay: -14s; }
+
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33% { transform: translate(30px, -30px) scale(1.05); }
+      66% { transform: translate(-20px, 20px) scale(0.95); }
+    }
+
+    .dot-grid {
+      background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+
+    .glass {
+      background: rgba(255,255,255,0.03);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .glass-hover:hover {
+      background: rgba(255,255,255,0.06);
+      border-color: rgba(255,255,255,0.1);
+    }
+
+    .nav-scrolled {
+      background: rgba(15, 23, 42, 0.85) !important;
+      backdrop-filter: blur(16px) !important;
+      -webkit-backdrop-filter: blur(16px) !important;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .text-gradient {
+      background: linear-gradient(135deg, #4ade80, #22c55e, #16a34a);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .chevron-animate polyline:nth-child(2) {
+      animation: chevronPulse 2.5s ease-in-out infinite 0.3s;
+    }
+    @keyframes chevronPulse {
+      0%, 100% { opacity: 0.7; transform: translateX(0); }
+      50% { opacity: 1; transform: translateX(4px); }
+    }
+
+    .step-number {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal { transition: none; opacity: 1; transform: none; }
+      .hero-stagger { animation: none; opacity: 1; transform: none; }
+      .orb { animation: none; }
+      .chevron-animate polyline { animation: none; }
+      html { scroll-behavior: auto; }
+    }
+
+    .mobile-menu {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+    .mobile-menu.open {
+      max-height: 400px;
+    }
+  </style>
+</head>
+<body class="bg-surface-900 text-white font-sans antialiased">
+
+  <!-- NAVBAR -->
+  <nav id="navbar" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300" style="background:transparent;">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16 sm:h-20">
+        <a href="/" class="flex items-center gap-3 shrink-0">
+          <svg class="w-9 h-9 sm:w-10 sm:h-10 chevron-animate" viewBox="0 0 32 32" fill="none">
+            <rect width="32" height="32" rx="7" fill="#22c55e"/>
+            <polyline points="8,8 16,16 8,24" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="17,8 25,16 17,24" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="flex flex-col leading-tight">
+            <span class="text-white font-bold text-lg tracking-wide">Trained</span>
+            <span class="text-white/60 text-[10px] font-light tracking-[3px] uppercase">by FIFO</span>
+          </div>
+        </a>
+
+        <div class="hidden md:flex items-center gap-8">
+          <a href="#features" class="text-sm text-white/70 hover:text-white transition-colors">Features</a>
+          <a href="#how-it-works" class="text-sm text-white/70 hover:text-white transition-colors">How It Works</a>
+          <a href="#why-us" class="text-sm text-white/70 hover:text-white transition-colors">Why Choose Us</a>
+          <a href="#pricing" class="text-sm text-white/70 hover:text-white transition-colors">Pricing</a>
+          <a href="/login" class="inline-flex items-center justify-center px-5 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors min-h-[44px]">Login</a>
+        </div>
+
+        <button id="menu-btn" class="md:hidden flex items-center justify-center w-11 h-11 rounded-lg text-white/70 hover:text-white hover:bg-white/5 transition-colors" aria-label="Toggle menu">
+          <svg id="menu-icon" class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+          <svg id="close-icon" class="w-6 h-6 hidden" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div id="mobile-menu" class="mobile-menu md:hidden">
+        <div class="pb-4 pt-2 flex flex-col gap-1">
+          <a href="#features" class="block px-4 py-3 rounded-lg text-white/70 hover:text-white hover:bg-white/5 transition-colors text-sm" onclick="closeMenu()">Features</a>
+          <a href="#how-it-works" class="block px-4 py-3 rounded-lg text-white/70 hover:text-white hover:bg-white/5 transition-colors text-sm" onclick="closeMenu()">How It Works</a>
+          <a href="#why-us" class="block px-4 py-3 rounded-lg text-white/70 hover:text-white hover:bg-white/5 transition-colors text-sm" onclick="closeMenu()">Why Choose Us</a>
+          <a href="#pricing" class="block px-4 py-3 rounded-lg text-white/70 hover:text-white hover:bg-white/5 transition-colors text-sm" onclick="closeMenu()">Pricing</a>
+          <a href="/login" class="block px-4 py-3 mt-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium text-center transition-colors" onclick="closeMenu()">Login</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="relative min-h-screen flex items-center justify-center overflow-hidden dot-grid">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <div class="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 text-center pt-20 pb-16">
+      <div class="hero-stagger flex justify-center mb-8">
+        <svg class="w-24 h-24 sm:w-32 sm:h-32" viewBox="0 0 160 160" fill="none">
+          <rect x="25" y="30" width="110" height="70" rx="10" fill="rgba(34,197,94,0.08)" stroke="#22c55e" stroke-width="1.5"/>
+          <circle cx="55" cy="58" r="12" fill="rgba(34,197,94,0.15)" stroke="#22c55e" stroke-width="1"/>
+          <rect x="50" y="53" width="10" height="10" rx="2" fill="rgba(34,197,94,0.4)"/>
+          <circle cx="80" cy="65" r="16" fill="rgba(34,197,94,0.1)"/>
+          <polygon points="76,58 76,72 88,65" fill="#22c55e" opacity="0.6"/>
+          <circle cx="110" cy="58" r="12" fill="rgba(34,197,94,0.15)" stroke="#22c55e" stroke-width="1"/>
+          <rect x="104" y="55" width="12" height="2" rx="1" fill="rgba(34,197,94,0.5)"/>
+          <rect x="104" y="60" width="12" height="2" rx="1" fill="rgba(34,197,94,0.3)"/>
+          <path d="M40 115 L60 105 L80 110 L100 98 L120 102" stroke="#22c55e" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="120" cy="102" r="3" fill="#22c55e"/>
+        </svg>
+      </div>
+
+      <h1 class="hero-stagger text-4xl sm:text-6xl lg:text-7xl font-black tracking-tight leading-none mb-6">
+        Keep employees <span class="text-gradient">engaged</span> long after the training ends
+      </h1>
+
+      <p class="hero-stagger text-lg sm:text-xl lg:text-2xl font-light text-white/70 max-w-3xl mx-auto mb-10">
+        Video content, interactive quizzes, progress tracking, and engagement analytics &mdash; training that sticks.
+      </p>
+
+      <div class="hero-stagger flex flex-col sm:flex-row items-center justify-center gap-4">
+        <a href="/login" class="inline-flex items-center justify-center px-8 py-4 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-base transition-all hover:shadow-lg hover:shadow-brand-500/20 min-h-[52px] w-full sm:w-auto">
+          Login
+          <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,4 14,12 6,20"/></svg>
+        </a>
+        <a href="/register" class="inline-flex items-center justify-center px-8 py-4 rounded-xl border border-white/10 hover:border-white/20 hover:bg-white/5 text-white font-medium text-base transition-all min-h-[52px] w-full sm:w-auto">
+          Start Free Trial
+        </a>
+      </div>
+    </div>
+
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-40">
+      <span class="text-xs tracking-widest uppercase">Scroll</span>
+      <svg class="w-5 h-5 animate-bounce" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4,2 12,10 20,2"/></svg>
+    </div>
+  </section>
+
+  <!-- CREDIBILITY STRIP -->
+  <section class="relative py-16 sm:py-20">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+        <div class="reveal glass rounded-2xl p-6 sm:p-8 text-center">
+          <div class="text-4xl sm:text-5xl font-bold text-gradient mb-2">Video</div>
+          <div class="text-sm text-white/60 font-medium uppercase tracking-wider">& Document Hosting</div>
+        </div>
+        <div class="reveal reveal-delay-1 glass rounded-2xl p-6 sm:p-8 text-center">
+          <div class="text-4xl sm:text-5xl font-bold text-gradient mb-2">Quizzes</div>
+          <div class="text-sm text-white/60 font-medium uppercase tracking-wider">Interactive</div>
+        </div>
+        <div class="reveal reveal-delay-2 glass rounded-2xl p-6 sm:p-8 text-center">
+          <div class="text-4xl sm:text-5xl font-bold text-gradient mb-2">Analytics</div>
+          <div class="text-sm text-white/60 font-medium uppercase tracking-wider">Progress Tracking</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features" class="relative py-20 sm:py-28">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal text-center mb-16 sm:mb-20">
+        <p class="text-brand-500 font-semibold text-sm uppercase tracking-widest mb-3">Features</p>
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold mb-4">Training that goes beyond the session</h2>
+        <p class="text-white/50 max-w-2xl mx-auto text-base sm:text-lg">Deliver content, assess understanding, and track engagement &mdash; all in one platform.</p>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="reveal glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 mb-6">
+            <svg class="w-7 h-7 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23,7 16,12 23,17"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Video & Document Hosting</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Upload training videos and documents. Employees access them anytime, anywhere &mdash; on any device.</p>
+        </div>
+
+        <div class="reveal reveal-delay-1 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 mb-6">
+            <svg class="w-7 h-7 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Interactive Quizzes</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Create assessments that test understanding. Multiple choice, true/false, and open-ended questions.</p>
+        </div>
+
+        <div class="reveal reveal-delay-2 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 mb-6">
+            <svg class="w-7 h-7 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Progress Dashboards</h3>
+          <p class="text-sm text-white/50 leading-relaxed">See who's completed what at a glance. Individual and team progress tracking with visual dashboards.</p>
+        </div>
+
+        <div class="reveal reveal-delay-3 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 mb-6">
+            <svg class="w-7 h-7 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.21 15.89A10 10 0 118 2.83"/><polyline points="22,12 22,2 12,2"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Engagement Analytics</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Understand how employees interact with content. Time spent, completion rates, and quiz performance.</p>
+        </div>
+
+        <div class="reveal reveal-delay-4 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 mb-6">
+            <svg class="w-7 h-7 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="8" r="7"/><polyline points="8.21,13.89 7,23 12,20 17,23 15.79,13.88"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Completion Certificates</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Automatically generate certificates when employees complete training modules. Professional and shareable.</p>
+        </div>
+
+        <div class="reveal reveal-delay-5 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500/10 mb-6">
+            <svg class="w-7 h-7 text-brand-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Multi-Tenant Management</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Manage multiple organisations from one platform. Each tenant gets their own content, users, and branding.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="how-it-works" class="relative py-20 sm:py-28">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal text-center mb-16">
+        <p class="text-brand-500 font-semibold text-sm uppercase tracking-widest mb-3">How It Works</p>
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold">Three steps to engaged employees</h2>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div class="reveal glass rounded-2xl p-8 text-center">
+          <div class="step-number inline-flex items-center justify-center w-14 h-14 rounded-full text-white text-xl font-bold mb-6">1</div>
+          <h3 class="text-xl font-bold mb-3">Upload Content</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Add training videos, documents, and supporting materials. Organise into modules and courses.</p>
+        </div>
+
+        <div class="reveal reveal-delay-1 glass rounded-2xl p-8 text-center">
+          <div class="step-number inline-flex items-center justify-center w-14 h-14 rounded-full text-white text-xl font-bold mb-6">2</div>
+          <h3 class="text-xl font-bold mb-3">Assign to Employees</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Assign courses to individuals or teams. Set deadlines and requirements for completion.</p>
+        </div>
+
+        <div class="reveal reveal-delay-2 glass rounded-2xl p-8 text-center">
+          <div class="step-number inline-flex items-center justify-center w-14 h-14 rounded-full text-white text-xl font-bold mb-6">3</div>
+          <h3 class="text-xl font-bold mb-3">Track Engagement</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Monitor progress in real time. See who's engaging, who's falling behind, and intervene early.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHY CHOOSE US -->
+  <section id="why-us" class="relative py-20 sm:py-28">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal text-center mb-16">
+        <p class="text-brand-500 font-semibold text-sm uppercase tracking-widest mb-3">Why Choose Us</p>
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold mb-4">Training built for<br class="hidden sm:block" /> South African organisations</h2>
+        <p class="text-white/50 max-w-2xl mx-auto text-base sm:text-lg">Affordable, practical, and designed for how SA businesses actually train their teams.</p>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <div class="reveal glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-500/10 mb-5">
+            <svg class="w-6 h-6 text-brand-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Skills Development Aligned</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Built with SA skills development and BBBEE training requirements in mind. Track and report with confidence.</p>
+        </div>
+
+        <div class="reveal reveal-delay-1 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-500/10 mb-5">
+            <svg class="w-6 h-6 text-brand-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">ZAR Pricing</h3>
+          <p class="text-sm text-white/50 leading-relaxed">No USD conversions. Predictable Rand-based monthly pricing that scales with your organisation.</p>
+        </div>
+
+        <div class="reveal reveal-delay-2 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-500/10 mb-5">
+            <svg class="w-6 h-6 text-brand-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Direct Support</h3>
+          <p class="text-sm text-white/50 leading-relaxed">No ticket queues, no chatbots. WhatsApp the founder directly. Real humans, same timezone.</p>
+        </div>
+
+        <div class="reveal reveal-delay-3 glass glass-hover rounded-2xl p-8 transition-all duration-300">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-brand-500/10 mb-5">
+            <svg class="w-6 h-6 text-brand-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">Works on Any Device</h3>
+          <p class="text-sm text-white/50 leading-relaxed">Employees can access training on phones, tablets, or desktops. Lightweight and fast-loading.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING TEASER -->
+  <section id="pricing" class="relative py-20 sm:py-28">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="reveal glass rounded-2xl sm:rounded-3xl p-8 sm:p-14 text-center">
+        <p class="text-brand-500 font-semibold text-sm uppercase tracking-widest mb-4">Pricing</p>
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold mb-6">Invest in your team</h2>
+        <p class="text-white/50 max-w-xl mx-auto mb-10 text-base sm:text-lg">Monthly pricing that scales with your organisation. No per-user charges on base tiers.</p>
+
+        <div class="flex flex-wrap items-center justify-center gap-4 mb-10">
+          <div class="inline-flex items-center gap-2 px-6 py-4 rounded-xl bg-brand-500/10 border border-brand-500/20">
+            <span class="text-brand-400 font-bold text-2xl">From R5,000</span>
+            <span class="text-white/40 text-sm">/month</span>
+          </div>
+        </div>
+
+        <p class="text-xs text-white/30 mb-8">Pricing varies by organisation size and content volume. Contact us for a tailored quote.</p>
+
+        <a href="/register" class="inline-flex items-center justify-center px-8 py-4 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-base transition-all hover:shadow-lg hover:shadow-brand-500/20 min-h-[52px]">
+          Start Free Trial
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="relative py-20 sm:py-28">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <div class="reveal">
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold mb-6">Ready to transform<br class="hidden sm:block" /> your training programme?</h2>
+        <p class="text-white/50 max-w-xl mx-auto mb-10 text-base sm:text-lg">Join organisations already using Trained to keep their teams engaged and developing.</p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a href="/login" class="inline-flex items-center justify-center px-8 py-4 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-base transition-all hover:shadow-lg hover:shadow-brand-500/20 min-h-[52px] w-full sm:w-auto">
+            Login
+            <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,4 14,12 6,20"/></svg>
+          </a>
+          <a href="https://wa.me/27825254011?text=Hi%20Riaan%2C%20I'm%20interested%20in%20Trained." target="_blank" rel="noopener" class="inline-flex items-center justify-center px-8 py-4 rounded-xl border border-white/10 hover:border-white/20 hover:bg-white/5 text-white font-medium text-base transition-all min-h-[52px] w-full sm:w-auto">
+            WhatsApp Us
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-white/5 py-12 sm:py-16">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10 sm:gap-8 mb-12">
+        <div class="sm:col-span-2 lg:col-span-1">
+          <div class="flex items-center gap-3 mb-4">
+            <svg class="w-8 h-8" viewBox="0 0 32 32" fill="none">
+              <rect width="32" height="32" rx="7" fill="#22c55e"/>
+              <polyline points="8,8 16,16 8,24" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <polyline points="17,8 25,16 17,24" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div class="flex flex-col leading-tight">
+              <span class="text-white font-bold text-base tracking-wide">FIFO Solutions</span>
+              <span class="text-white/40 text-[10px] font-light tracking-[2px]">(Pty) Ltd</span>
+            </div>
+          </div>
+          <p class="text-sm text-white/40 leading-relaxed mb-3">Fully Integrated. Fully Online.</p>
+          <p class="text-xs text-white/25">Reg. 2026/071559/07</p>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-semibold text-white/70 uppercase tracking-wider mb-4">Products</h4>
+          <ul class="space-y-2.5">
+            <li><a href="https://file.fifo.systems" target="_blank" rel="noopener" class="text-sm text-white/40 hover:text-white/70 transition-colors">File by FIFO</a></li>
+            <li><span class="text-sm text-white/70 font-medium">Trained</span></li>
+            <li><a href="https://fin.fifo.systems" target="_blank" rel="noopener" class="text-sm text-white/40 hover:text-white/70 transition-colors">Fin by FIFO</a></li>
+            <li><a href="https://law.fifo.systems" target="_blank" rel="noopener" class="text-sm text-white/40 hover:text-white/70 transition-colors">FIFO Legal</a></li>
+            <li><a href="https://homes.fifo.systems" target="_blank" rel="noopener" class="text-sm text-white/40 hover:text-white/70 transition-colors">Home Digest</a></li>
+          </ul>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-semibold text-white/70 uppercase tracking-wider mb-4">Quick Links</h4>
+          <ul class="space-y-2.5">
+            <li><a href="#features" class="text-sm text-white/40 hover:text-white/70 transition-colors">Features</a></li>
+            <li><a href="#how-it-works" class="text-sm text-white/40 hover:text-white/70 transition-colors">How It Works</a></li>
+            <li><a href="#pricing" class="text-sm text-white/40 hover:text-white/70 transition-colors">Pricing</a></li>
+            <li><a href="https://fifo.systems" target="_blank" rel="noopener" class="text-sm text-white/40 hover:text-white/70 transition-colors">FIFO Solutions</a></li>
+          </ul>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-semibold text-white/70 uppercase tracking-wider mb-4">Contact</h4>
+          <ul class="space-y-2.5">
+            <li><a href="mailto:riaan@fifo.systems" class="text-sm text-white/40 hover:text-white/70 transition-colors">riaan@fifo.systems</a></li>
+            <li><a href="https://wa.me/27825254011" target="_blank" rel="noopener" class="text-sm text-white/40 hover:text-white/70 transition-colors">082 525 4011</a></li>
+            <li><span class="text-sm text-white/25">Durbanville, Western Cape</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="pt-8 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <p class="text-xs text-white/25">&copy; 2026 FIFO Solutions (Pty) Ltd. All rights reserved.</p>
+        <p class="text-xs text-white/20">Enterprise No. 2026/071559/07</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- SCRIPTS -->
+  <script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 50) { navbar.classList.add('nav-scrolled'); }
+      else { navbar.classList.remove('nav-scrolled'); }
+    }, { passive: true });
+
+    const menuBtn = document.getElementById('menu-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    const menuIcon = document.getElementById('menu-icon');
+    const closeIcon = document.getElementById('close-icon');
+
+    menuBtn.addEventListener('click', () => {
+      const isOpen = mobileMenu.classList.toggle('open');
+      menuIcon.classList.toggle('hidden', isOpen);
+      closeIcon.classList.toggle('hidden', !isOpen);
+    });
+
+    function closeMenu() {
+      mobileMenu.classList.remove('open');
+      menuIcon.classList.remove('hidden');
+      closeIcon.classList.add('hidden');
+    }
+
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) { entry.target.classList.add('visible'); observer.unobserve(entry.target); }
+        });
+      }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+      document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+    } else {
+      document.querySelectorAll('.reveal').forEach(el => el.classList.add('visible'));
+    }
+  </script>
+</body>
+</html>

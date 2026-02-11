@@ -6,6 +6,7 @@ import { useVisualEffects } from '../../lib/visualEffects'
 import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
 import { useGameTheme, getCorrectStyle, getIncorrectStyle } from '../../hooks/useGameTheme'
+import { FirestoreService } from '../../lib/firestore'
 
 interface SpeedQuestion {
   id: string
@@ -34,6 +35,8 @@ interface SpeedRoundGameProps {
   timeLimit: number
   questionTimeLimit?: number
   enableSkip?: boolean
+  sessionId?: string
+  participantId?: string
 }
 
 interface GameStats {
@@ -77,7 +80,9 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
   participants = [],
   timeLimit,
   questionTimeLimit = 10,
-  enableSkip = true
+  enableSkip = true,
+  sessionId,
+  participantId
 }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)
@@ -117,30 +122,27 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
 
   const currentQuestion = questions[currentQuestionIndex]
 
-  // Game start sound effect
+  // No game start sounds on phone - presenter handles them
   useEffect(() => {
-    playSound('gameStart')
-    playSequence([{ sound: 'ding', delay: 0 }, { sound: 'tick', delay: 100 }])
+    // Just initialize
   }, [])
 
-  // Game timer
+  // Game timer - anchor-based (prevents drift)
+  // Timer sounds play on presenter only (phones are quiet)
+  const gameTimerAnchorRef = useRef<number>(Date.now())
+  const questionTimerAnchorRef = useRef<number>(Date.now())
+
   useEffect(() => {
     if (gameTimeRemaining > 0 && !gameComplete) {
       const timer = setInterval(() => {
-        setGameTimeRemaining(prev => {
-          if (prev === 31) {
-            playSound('timeWarning')
-          }
-          if (prev === 11) {
-            tensionIntervalRef.current = playAmbientTension(10000) as NodeJS.Timeout
-            playSound('tension')
-          }
-          if (prev <= 1) {
-            endGame()
-            return 0
-          }
-          return prev - 1
-        })
+        const elapsed = Math.floor((Date.now() - gameTimerAnchorRef.current) / 1000)
+        const remaining = Math.max(0, (timeLimit || 300) - elapsed)
+
+        setGameTimeRemaining(remaining)
+
+        if (remaining <= 0) {
+          endGame()
+        }
       }, 1000)
 
       return () => {
@@ -152,40 +154,32 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
     }
   }, [gameTimeRemaining, gameComplete])
 
-  // Question timer
+  // Question timer - anchor-based
   useEffect(() => {
     if (questionTimeRemaining > 0 && !isAnswering && !gameComplete) {
       const timer = setInterval(() => {
-        setQuestionTimeRemaining(prev => {
-          if (prev === 4) {
-            playSound('timeWarning')
-          }
-          if (prev <= 1) {
-            playSound('buzz')
-            // Auto-skip when time runs out
-            skipQuestion(true)
-            return questionTimeLimit
-          }
-          return prev - 1
-        })
+        const elapsed = Math.floor((Date.now() - questionTimerAnchorRef.current) / 1000)
+        const remaining = Math.max(0, questionTimeLimit - elapsed)
+
+        setQuestionTimeRemaining(remaining)
+
+        if (remaining <= 0) {
+          skipQuestion(true)
+        }
       }, 1000)
 
       return () => clearInterval(timer)
     }
   }, [questionTimeRemaining, isAnswering, gameComplete])
 
-  // Reset question timer when moving to next question
+  // Reset question timer anchor when moving to next question
   useEffect(() => {
+    questionTimerAnchorRef.current = Date.now()
     setQuestionTimeRemaining(questionTimeLimit)
     questionStartTimeRef.current = Date.now()
     setSelectedAnswer(null)
     setShowResult(false)
     setCurrentResult(null)
-
-    // Play transition sound for new question
-    if (currentQuestionIndex > 0) {
-      playSound('whoosh')
-    }
   }, [currentQuestionIndex])
 
   const submitAnswer = (answerIndex: number) => {
@@ -200,7 +194,7 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
     // Get the answer button for visual effects
     const answerButton = answerButtonRefs.current[answerIndex]
 
-    // Play sound and trigger effects based on correctness
+    // Phone only gets correct/incorrect sounds
     if (isCorrect) {
       playSound('correct')
       if (answerButton) {
@@ -208,10 +202,9 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
       }
       triggerScreenEffect('screen-flash', { color: colors.success })
 
-      // Check for streak effects
+      // Visual streak effects (no streak sound on phone)
       const newStreak = streak + 1
       if (newStreak >= 5) {
-        playSound('streak')
         triggerScreenEffect('streak-fire')
         if (answerButton) {
           applyEffect(answerButton, 'streak-fire')
@@ -237,7 +230,7 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
       const newStreak = streak + 1
       if (STREAK_BONUSES[newStreak]) {
         earnedPoints += STREAK_BONUSES[newStreak]
-        playSound('achievement')
+        // Achievement sounds play on results page for winners only
       }
 
       setScore(prev => {
@@ -263,7 +256,24 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
       earnedPoints
     }
 
-    setResults(prev => [...prev, result])
+    setResults(prev => {
+      const newResults = [...prev, result]
+      // Persist to Firestore after each answer
+      if (sessionId && participantId) {
+        const newScore = score + earnedPoints
+        const firestoreAnswers = newResults.map(r => ({
+          questionId: r.questionId,
+          selectedAnswer: r.selectedAnswer ?? -1,
+          isCorrect: r.isCorrect,
+          timeSpent: Math.round(r.timeSpent)
+        }))
+        FirestoreService.updateParticipantGameState(
+          sessionId, participantId,
+          { currentQuestionIndex, score: newScore, streak: isCorrect ? streak + 1 : 0, answers: firestoreAnswers }
+        ).catch(err => console.error('Error updating participant game state:', err))
+      }
+      return newResults
+    })
     setCurrentResult(isCorrect ? 'correct' : 'wrong')
     setShowResult(true)
     setQuestionsAnswered(prev => prev + 1)
@@ -281,8 +291,6 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
 
   const skipQuestion = (autoSkip = false) => {
     if (isAnswering || gameComplete) return
-
-    playSound('click')
     const timeSpent = (Date.now() - questionStartTimeRef.current) / 1000
 
     const result: QuestionResult = {
@@ -293,7 +301,23 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
       earnedPoints: 0
     }
 
-    setResults(prev => [...prev, result])
+    setResults(prev => {
+      const newResults = [...prev, result]
+      // Persist skip to Firestore
+      if (sessionId && participantId) {
+        const firestoreAnswers = newResults.map(r => ({
+          questionId: r.questionId,
+          selectedAnswer: r.selectedAnswer ?? -1,
+          isCorrect: r.isCorrect,
+          timeSpent: Math.round(r.timeSpent)
+        }))
+        FirestoreService.updateParticipantGameState(
+          sessionId, participantId,
+          { currentQuestionIndex, score, streak: 0, answers: firestoreAnswers }
+        ).catch(err => console.error('Error updating participant game state:', err))
+      }
+      return newResults
+    })
     setStreak(0)
     setCurrentResult('skipped')
     setShowResult(true)
@@ -329,13 +353,8 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
       clearInterval(tensionIntervalRef.current)
     }
 
-    // Play game end sound
-    playSound('gameEnd')
-    setTimeout(() => {
-      playSound('fanfare')
-    }, 500)
-
-    // Celebration effects
+    // Game end sounds play on presenter only
+    // Visual celebration still shows on phone
     triggerScreenEffect('celebration-confetti')
 
     const totalTime = (Date.now() - gameStartTime) / 1000
@@ -370,6 +389,26 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
     }
 
     processGameCompletion(gameStatsForAchievements)
+
+    // Persist final state and mark completed in Firestore
+    if (sessionId && participantId) {
+      const normalizedScore = correctAnswers * 100
+      const firestoreAnswers = results.map(r => ({
+        questionId: r.questionId,
+        selectedAnswer: r.selectedAnswer ?? -1,
+        isCorrect: r.isCorrect,
+        timeSpent: Math.round(r.timeSpent)
+      }))
+
+      FirestoreService.updateParticipantGameState(
+        sessionId, participantId,
+        { currentQuestionIndex, score: normalizedScore, streak: bestStreak, completed: true, answers: firestoreAnswers }
+      ).catch(err => console.error('Error updating final game state:', err))
+
+      FirestoreService.markParticipantCompleted(
+        sessionId, participantId, normalizedScore, Math.round(totalTime)
+      ).catch(err => console.error('Error marking participant completed:', err))
+    }
 
     setTimeout(() => {
       onGameComplete(score, stats)
@@ -559,11 +598,11 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
           <div className="grid grid-cols-4 gap-4 text-center">
             <div>
               <div ref={scoreCounterRef} className="text-2xl font-bold score-counter" style={styles.accentText}>{score}</div>
-              <div className="text-xs">Score</div>
+              <div className="text-sm">Score</div>
             </div>
             <div>
               <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>{questionsAnswered}</div>
-              <div className="text-xs">Questions</div>
+              <div className="text-sm">Questions</div>
             </div>
             <div>
               <div
@@ -572,13 +611,13 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
               >
                 {streak}
               </div>
-              <div className="text-xs">Streak</div>
+              <div className="text-sm">Streak</div>
             </div>
             <div>
               <div className="text-2xl font-bold" style={{ color: 'var(--celebration-color)' }}>
                 {Math.round((results.filter(r => r.isCorrect).length / Math.max(questionsAnswered, 1)) * 100)}%
               </div>
-              <div className="text-xs">Accuracy</div>
+              <div className="text-sm">Accuracy</div>
             </div>
           </div>
         </div>
@@ -637,12 +676,12 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
             </span>
             <div className="flex items-center space-x-2">
               <span
-                className="px-2 py-1 rounded text-xs font-medium"
+                className="px-2 py-1 rounded text-sm font-medium"
                 style={getDifficultyStyle(currentQuestion.difficulty)}
               >
                 {currentQuestion.difficulty.toUpperCase()}
               </span>
-              <span className="text-xs" style={{ color: 'var(--text-secondary-color)' }}>
+              <span className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
                 {currentQuestion.points || 100} pts × {DIFFICULTY_MULTIPLIERS[currentQuestion.difficulty]}
               </span>
             </div>
@@ -757,7 +796,6 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
         showParticipantCount={true}
         showAnswerProgress={true}
         onReaction={(reaction) => {
-          playSound('click')
           console.log('Player reacted with:', reaction)
         }}
       />

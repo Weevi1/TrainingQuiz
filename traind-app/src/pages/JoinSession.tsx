@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Users, Play, Clock, AlertCircle, CheckCircle, QrCode, UserPlus } from 'lucide-react'
+import { Users, Play, Clock, AlertCircle, CheckCircle, QrCode, UserPlus, Volume2, Award } from 'lucide-react'
 import { FirestoreService, type GameSession, type Organization } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
-import { soundSystem } from '../lib/soundSystem'
+
 import { applyOrganizationBranding } from '../lib/applyBranding'
 
 interface Participant {
@@ -66,7 +66,7 @@ export const JoinSession: React.FC = () => {
 
           if (newestParticipant) {
             setNewParticipantName(newestParticipant.name)
-            soundSystem.play('participantJoin')
+            // Join sounds only play on presenter (SessionControl)
 
             // Hide toast after 3 seconds
             setTimeout(() => {
@@ -305,7 +305,7 @@ export const JoinSession: React.FC = () => {
             <div className="mb-6">
               <QrCode className="mx-auto text-primary mb-4" size={48} />
               <h2 className="text-2xl font-bold mb-2">Enter Session Code</h2>
-              <p className="text-text-secondary">
+              <p className="text-base text-text-secondary">
                 Enter the 6-character code provided by your trainer
               </p>
             </div>
@@ -324,8 +324,8 @@ export const JoinSession: React.FC = () => {
               </div>
 
               {error && (
-                <div className="flex items-center space-x-2 text-sm" style={{ color: 'var(--error-color)' }}>
-                  <AlertCircle size={16} />
+                <div className="flex items-center space-x-2 text-base" style={{ color: 'var(--error-color)' }}>
+                  <AlertCircle size={18} />
                   <span>{error}</span>
                 </div>
               )}
@@ -340,7 +340,7 @@ export const JoinSession: React.FC = () => {
             </div>
 
             <div className="mt-8 pt-6 border-t border-border">
-              <p className="text-sm text-text-secondary">
+              <p className="text-base text-text-secondary">
                 Scan the QR code shown by your trainer or enter the session code manually
               </p>
             </div>
@@ -352,25 +352,25 @@ export const JoinSession: React.FC = () => {
             <div className="card">
               <div className="text-center mb-6">
                 <h2 className="text-2xl font-bold text-primary mb-2">{session.title}</h2>
-                <div className="flex items-center justify-center space-x-4 text-text-secondary">
+                <div className="flex items-center justify-center space-x-4 text-base text-text-secondary">
                   <div className="flex items-center space-x-1">
-                    <Play size={16} />
+                    <Play size={18} />
                     <span className="capitalize">{session.gameType}</span>
                   </div>
                   <div className="flex items-center space-x-1">
-                    <Users size={16} />
+                    <Users size={18} />
                     <span>{session.currentParticipants}/{session.participantLimit}</span>
                   </div>
                   <div className="flex items-center space-x-1">
-                    <Clock size={16} />
+                    <Clock size={18} />
                     <span
-                      className="px-2 py-1 rounded text-xs"
+                      className="px-2 py-1 rounded text-sm font-medium"
                       style={{
-                        backgroundColor: session.status === 'waiting' ? 'var(--primary-light-color)' :
-                          session.status === 'active' ? 'var(--success-light-color)' :
-                          'var(--surface-color)',
-                        color: session.status === 'waiting' ? 'var(--primary-color)' :
+                        backgroundColor: session.status === 'waiting' ? 'var(--primary-color)' :
                           session.status === 'active' ? 'var(--success-color)' :
+                          'var(--surface-hover-color)',
+                        color: session.status === 'waiting' ? 'var(--text-on-primary-color)' :
+                          session.status === 'active' ? '#ffffff' :
                           'var(--text-secondary-color)'
                       }}
                     >
@@ -383,33 +383,45 @@ export const JoinSession: React.FC = () => {
               {/* Name Entry */}
               <div className="max-w-sm mx-auto space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Your Name
+                  <label className="block text-base font-medium mb-2" style={{ color: 'var(--text-color)' }}>
+                    {organization?.settings?.enableAttendanceCertificates ? 'Your Full Name' : 'Your Name'}
                   </label>
                   <input
                     type="text"
                     value={participantName}
                     onChange={(e) => setParticipantName(e.target.value)}
                     className="input w-full"
-                    placeholder="Enter your name"
+                    placeholder={organization?.settings?.enableAttendanceCertificates ? 'Enter your full name' : 'Enter your name'}
                     maxLength={50}
                   />
+                  {organization?.settings?.enableAttendanceCertificates && (
+                    <div
+                      className="flex items-center space-x-2 text-base rounded-lg p-3 mt-2"
+                      style={{
+                        backgroundColor: 'var(--surface-hover-color)',
+                        color: 'var(--text-color)',
+                        border: '1px solid var(--border-color)'
+                      }}
+                    >
+                      <Award size={18} className="flex-shrink-0" style={{ color: 'var(--accent-color)' }} />
+                      <span>You'll receive an attendance certificate on completion — please use your full name as it should appear on the certificate.</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Avatar Selection */}
                 <div>
-                  <label className="block text-sm font-medium mb-2">
+                  <label className="block text-base font-medium mb-2">
                     Choose Your Avatar
                   </label>
-                  <div className="grid grid-cols-6 gap-2">
+                  <div className="grid grid-cols-6 gap-3">
                     {AVATAR_OPTIONS.map((avatar) => (
                       <button
                         key={avatar}
                         onClick={() => {
                           setSelectedAvatar(avatar)
-                          soundSystem.play('click')
                         }}
-                        className={`w-10 h-10 text-xl rounded-lg transition-all ${
+                        className={`w-12 h-12 text-2xl rounded-lg transition-all ${
                           selectedAvatar === avatar ? 'ring-2 ring-offset-2 scale-110' : 'hover:scale-105'
                         }`}
                         style={{
@@ -430,9 +442,22 @@ export const JoinSession: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Volume tip */}
+                <div
+                  className="flex items-center space-x-2 text-base rounded-lg p-3"
+                  style={{
+                    backgroundColor: 'var(--surface-hover-color)',
+                    color: 'var(--text-color)',
+                    border: '1px solid var(--border-color)'
+                  }}
+                >
+                  <Volume2 size={20} className="flex-shrink-0" style={{ color: 'var(--primary-color)' }} />
+                  <span>Turn up your volume for sound effects during the quiz!</span>
+                </div>
+
                 {error && (
-                  <div className="flex items-center space-x-2 text-sm" style={{ color: 'var(--error-color)' }}>
-                    <AlertCircle size={16} />
+                  <div className="flex items-center space-x-2 text-base" style={{ color: 'var(--error-color)' }}>
+                    <AlertCircle size={18} />
                     <span>{error}</span>
                   </div>
                 )}
@@ -449,7 +474,7 @@ export const JoinSession: React.FC = () => {
                     </>
                   ) : (
                     <>
-                      <Users size={16} />
+                      <Users size={20} />
                       <span>Join Session</span>
                     </>
                   )}
@@ -464,7 +489,7 @@ export const JoinSession: React.FC = () => {
               </h3>
 
               {participants.length === 0 ? (
-                <p className="text-text-secondary text-center py-4">
+                <p className="text-base text-text-secondary text-center py-4">
                   No participants yet. Be the first to join!
                 </p>
               ) : (
@@ -486,7 +511,7 @@ export const JoinSession: React.FC = () => {
                         />
                         <span className="font-medium">{participant.name}</span>
                       </div>
-                      <span className="text-sm text-text-secondary">
+                      <span className="text-base text-text-secondary">
                         {participant.isReady ? 'Ready' : 'Joining...'}
                       </span>
                     </div>
@@ -500,15 +525,16 @@ export const JoinSession: React.FC = () => {
               <div
                 className="card"
                 style={{
-                  backgroundColor: 'var(--primary-light-color)',
-                  borderColor: 'var(--primary-color)'
+                  backgroundColor: 'var(--surface-color)',
+                  borderColor: 'var(--primary-color)',
+                  borderLeftWidth: '4px'
                 }}
               >
                 <div className="flex items-center space-x-3">
                   <Clock style={{ color: 'var(--primary-color)' }} size={20} />
                   <div>
-                    <p className="font-medium" style={{ color: 'var(--primary-dark-color)' }}>Waiting to Start</p>
-                    <p className="text-sm" style={{ color: 'var(--primary-color)' }}>
+                    <p className="font-medium" style={{ color: 'var(--text-color)' }}>Waiting to Start</p>
+                    <p className="text-base" style={{ color: 'var(--text-secondary-color)' }}>
                       The trainer will start the session when ready
                     </p>
                   </div>
@@ -520,15 +546,16 @@ export const JoinSession: React.FC = () => {
               <div
                 className="card"
                 style={{
-                  backgroundColor: 'var(--success-light-color)',
-                  borderColor: 'var(--success-color)'
+                  backgroundColor: 'var(--surface-color)',
+                  borderColor: 'var(--success-color)',
+                  borderLeftWidth: '4px'
                 }}
               >
                 <div className="flex items-center space-x-3">
                   <Play style={{ color: 'var(--success-color)' }} size={20} />
                   <div>
-                    <p className="font-medium" style={{ color: 'var(--success-color)' }}>Session Active</p>
-                    <p className="text-sm" style={{ color: 'var(--success-color)' }}>
+                    <p className="font-medium" style={{ color: 'var(--text-color)' }}>Session Active</p>
+                    <p className="text-base" style={{ color: 'var(--text-secondary-color)' }}>
                       You can still join this session
                     </p>
                   </div>

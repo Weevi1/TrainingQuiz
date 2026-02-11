@@ -1,6 +1,6 @@
-// Comprehensive sound system for training games
-// Uses Web Audio API for dynamic sound generation and playback
-// Inspired by v1 gameShowSounds with auto-initialization and grouped volumes
+// Sound system for training games
+// Uses Web Audio API for dynamic sound generation
+// Architecture based on proven v1 gameShowSounds.js pattern
 
 export type SoundType =
   | 'correct'
@@ -21,36 +21,29 @@ export type SoundType =
   | 'gameEnd'
   | 'participantJoin'
 
-// Grouped volume levels for consistent UX (learned from v1)
-const volumeLevels = {
-  feedback: 0.25,      // Correct/Wrong answers - moderate volume
-  selection: 0.15,     // UI interactions - subtle
-  celebration: 0.35,   // Victory/celebrations - slightly louder
-  timer: 0.2,          // Clock ticking - background level
-  fanfare: 0.4,        // Show start/complete - prominent
-  notification: 0.3,   // Participant join, etc.
+// Volume levels for consistent UX (from v1)
+const vol = {
+  feedback: 0.25,
+  selection: 0.15,
+  celebration: 0.3,
+  timer: 0.2,
+  fanfare: 0.35,
+  notification: 0.3,
 }
 
 class GameSoundSystem {
   private audioContext: AudioContext | null = null
-  private masterGain: GainNode | null = null
   private isEnabled = true
-  private volume = 0.7
   private initialized = false
 
   constructor() {
-    // Set up auto-initialization on first user interaction (browser autoplay policy)
     this.setupAutoInit()
   }
 
   private setupAutoInit() {
     const initOnInteraction = () => {
-      if (!this.initialized) {
-        this.initialize()
-      }
+      this.init()
     }
-
-    // Initialize on first user interaction (required by browser autoplay policies)
     if (typeof document !== 'undefined') {
       document.addEventListener('click', initOnInteraction, { once: true })
       document.addEventListener('touchstart', initOnInteraction, { once: true })
@@ -58,19 +51,14 @@ class GameSoundSystem {
     }
   }
 
-  private async initialize() {
+  init() {
     if (this.initialized) return
-
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-      this.masterGain = this.audioContext.createGain()
-      this.masterGain.connect(this.audioContext.destination)
-      this.masterGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime)
       this.initialized = true
-      console.log('🎵 Sound system initialized!')
+      console.log('🎵 Sound system initialized')
     } catch (error) {
       console.warn('Audio not supported:', error)
-      this.audioContext = null
     }
   }
 
@@ -78,396 +66,317 @@ class GameSoundSystem {
     this.isEnabled = enabled
   }
 
-  setVolume(volume: number) {
-    this.volume = Math.max(0, Math.min(1, volume))
-    if (this.masterGain) {
-      this.masterGain.gain.setValueAtTime(this.volume, this.audioContext!.currentTime)
-    }
+  setVolume(_volume: number) {
+    // Volume is controlled per-sound via the volume levels
+  }
+
+  // Core helper: creates an oscillator+gain pair connected to destination (v1 pattern)
+  private createOsc(frequency: number, type: OscillatorType = 'sine', volume: number = 0.2, duration: number = 0.5) {
+    if (!this.initialized || !this.audioContext) return null
+
+    const osc = this.audioContext.createOscillator()
+    const gain = this.audioContext.createGain()
+
+    osc.connect(gain)
+    gain.connect(this.audioContext.destination)
+
+    osc.frequency.setValueAtTime(frequency, this.audioContext.currentTime)
+    osc.type = type
+
+    // Envelope: 50ms attack from 0, then decay (prevents clicks, matches v1)
+    gain.gain.setValueAtTime(0, this.audioContext.currentTime)
+    gain.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.05)
+    gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration)
+
+    return { osc, gain }
   }
 
   async play(soundType: SoundType) {
-    // Auto-initialize if not done yet
+    if (!this.isEnabled) return
+
+    // Auto-init if needed
     if (!this.initialized) {
-      await this.initialize()
+      this.init()
     }
+    if (!this.audioContext) return
 
-    if (!this.isEnabled || !this.audioContext || !this.masterGain) return
-
-    // Resume audio context if suspended (browser autoplay policy)
+    // Resume if suspended
     if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume()
+      try { await this.audioContext.resume() } catch { /* ignore */ }
     }
 
-    const oscillator = this.audioContext.createOscillator()
-    const gainNode = this.audioContext.createGain()
-    const filterNode = this.audioContext.createBiquadFilter()
-
-    oscillator.connect(filterNode)
-    filterNode.connect(gainNode)
-    gainNode.connect(this.masterGain)
-
-    const now = this.audioContext.currentTime
-
-    switch (soundType) {
-      case 'correct':
-        this.playCorrectSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'incorrect':
-        this.playIncorrectSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'tick':
-        this.playTickSound(oscillator, gainNode, now)
-        break
-
-      case 'celebration':
-        this.playCelebrationSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'tension':
-        this.playTensionSound(oscillator, gainNode, now)
-        break
-
-      case 'whoosh':
-        this.playWhooshSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'ding':
-        this.playDingSound(oscillator, gainNode, now)
-        break
-
-      case 'buzz':
-        this.playBuzzSound(oscillator, gainNode, now)
-        break
-
-      case 'fanfare':
-        this.playFanfareSound(oscillator, gainNode, now)
-        break
-
-      case 'heartbeat':
-        this.playHeartbeatSound(oscillator, gainNode, now)
-        break
-
-      case 'click':
-        this.playClickSound(oscillator, gainNode, now)
-        break
-
-      case 'streak':
-        this.playStreakSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'achievement':
-        this.playAchievementSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'timeWarning':
-        this.playTimeWarningSound(oscillator, gainNode, now)
-        break
-
-      case 'gameStart':
-        this.playGameStartSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'gameEnd':
-        this.playGameEndSound(oscillator, gainNode, filterNode, now)
-        break
-
-      case 'participantJoin':
-        this.playParticipantJoinSound(oscillator, gainNode, filterNode, now)
-        break
-
-      default:
-        this.playClickSound(oscillator, gainNode, now)
+    try {
+      switch (soundType) {
+        case 'correct': this.playCorrect(); break
+        case 'incorrect': this.playIncorrect(); break
+        case 'tick': this.playTick(); break
+        case 'celebration': this.playCelebration(); break
+        case 'tension': this.playTension(); break
+        case 'whoosh': this.playWhoosh(); break
+        case 'ding': this.playDing(); break
+        case 'buzz': this.playBuzz(); break
+        case 'fanfare': this.playFanfare(); break
+        case 'heartbeat': this.playHeartbeat(); break
+        case 'click': this.playClick(); break
+        case 'streak': this.playStreak(); break
+        case 'achievement': this.playAchievement(); break
+        case 'timeWarning': this.playTimeWarning(); break
+        case 'gameStart': this.playGameStart(); break
+        case 'gameEnd': this.playGameEnd(); break
+        case 'participantJoin': this.playParticipantJoin(); break
+        default: this.playClick()
+      }
+    } catch (error) {
+      console.warn('Sound play error:', soundType, error)
     }
-
-    oscillator.start(now)
   }
 
-  private playCorrectSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Uplifting major chord progression
-    osc.frequency.setValueAtTime(523.25, time) // C5
-    osc.frequency.setValueAtTime(659.25, time + 0.1) // E5
-    osc.frequency.setValueAtTime(783.99, time + 0.2) // G5
-    osc.type = 'sine'
+  // === SOUND METHODS (each creates its own oscillators, v1 pattern) ===
 
-    filter.frequency.setValueAtTime(2000, time)
-    filter.Q.setValueAtTime(1, time)
-
-    gain.gain.setValueAtTime(0.3, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.6)
-
-    osc.stop(time + 0.6)
+  private playCorrect() {
+    if (!this.audioContext) return
+    const v = vol.feedback
+    // Layered harmonics (from v1)
+    const harmonics = [
+      { freq: 800, type: 'sine' as OscillatorType, v: v * 1.0 },
+      { freq: 1200, type: 'sine' as OscillatorType, v: v * 0.6 },
+      { freq: 1600, type: 'triangle' as OscillatorType, v: v * 0.3 },
+    ]
+    harmonics.forEach(h => {
+      const o = this.createOsc(h.freq, h.type, h.v, 0.6)
+      if (!o) return
+      // Ascending sweep
+      o.osc.frequency.exponentialRampToValueAtTime(h.freq * 1.4, this.audioContext!.currentTime + 0.1)
+      o.osc.frequency.exponentialRampToValueAtTime(h.freq * 1.1, this.audioContext!.currentTime + 0.4)
+      o.osc.start()
+      o.osc.stop(this.audioContext!.currentTime + 0.6)
+    })
   }
 
-  private playIncorrectSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Descending minor pattern
-    osc.frequency.setValueAtTime(415.30, time) // G#4
-    osc.frequency.setValueAtTime(369.99, time + 0.1) // F#4
-    osc.frequency.setValueAtTime(311.13, time + 0.2) // E♭4
-    osc.type = 'sawtooth'
-
-    filter.type = 'lowpass'
-    filter.frequency.setValueAtTime(800, time)
-    filter.Q.setValueAtTime(5, time)
-
-    gain.gain.setValueAtTime(0.4, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.8)
-
-    osc.stop(time + 0.8)
+  private playIncorrect() {
+    if (!this.audioContext) return
+    const v = vol.feedback
+    // Layered buzzer (from v1)
+    const layers = [
+      { freq: 150, type: 'sawtooth' as OscillatorType, v: v * 0.8 },
+      { freq: 100, type: 'square' as OscillatorType, v: v * 0.6 },
+      { freq: 200, type: 'sawtooth' as OscillatorType, v: v * 0.4 },
+    ]
+    layers.forEach(l => {
+      const o = this.createOsc(l.freq, l.type, l.v, 0.7)
+      if (!o) return
+      // Frequency drop
+      o.osc.frequency.linearRampToValueAtTime(l.freq * 0.7, this.audioContext!.currentTime + 0.6)
+      // LFO modulation for mechanical buzzer feel
+      const lfo = this.audioContext!.createOscillator()
+      const lfoGain = this.audioContext!.createGain()
+      lfo.frequency.setValueAtTime(8, this.audioContext!.currentTime)
+      lfoGain.gain.setValueAtTime(5, this.audioContext!.currentTime)
+      lfo.connect(lfoGain)
+      lfoGain.connect(o.osc.frequency)
+      o.osc.start()
+      lfo.start()
+      o.osc.stop(this.audioContext!.currentTime + 0.7)
+      lfo.stop(this.audioContext!.currentTime + 0.7)
+    })
   }
 
-  private playTickSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Sharp, brief tick
-    osc.frequency.setValueAtTime(800, time)
-    osc.type = 'square'
-
-    gain.gain.setValueAtTime(0.15, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.1)
-
-    osc.stop(time + 0.1)
+  private playTick() {
+    const o = this.createOsc(800, 'square', vol.timer, 0.15)
+    if (!o) return
+    o.osc.start()
+    o.osc.stop(this.audioContext!.currentTime + 0.15)
   }
 
-  private playCelebrationSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Triumphant ascending melody
-    const notes = [523.25, 587.33, 659.25, 783.99, 880, 1046.50] // C5, D5, E5, G5, A5, C6
-    osc.type = 'sine'
-
-    filter.frequency.setValueAtTime(3000, time)
-    filter.Q.setValueAtTime(2, time)
-
+  private playCelebration() {
+    if (!this.audioContext) return
+    const notes = [440, 554, 659, 880]
     notes.forEach((freq, i) => {
-      osc.frequency.setValueAtTime(freq, time + (i * 0.15))
+      setTimeout(() => {
+        const o = this.createOsc(freq, 'triangle', vol.celebration, 0.4)
+        if (!o) return
+        o.osc.start()
+        o.osc.stop(this.audioContext!.currentTime + 0.4)
+      }, i * 100)
     })
-
-    gain.gain.setValueAtTime(0.4, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 1.2)
-
-    osc.stop(time + 1.2)
   }
 
-  private playTensionSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Low, ominous pulse
-    osc.frequency.setValueAtTime(55, time) // A1
-    osc.type = 'triangle'
-
-    gain.gain.setValueAtTime(0.0, time)
-    gain.gain.linearRampToValueAtTime(0.3, time + 0.1)
-    gain.gain.linearRampToValueAtTime(0.0, time + 0.5)
-    gain.gain.linearRampToValueAtTime(0.3, time + 0.6)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 1.0)
-
-    osc.stop(time + 1.0)
+  private playTension() {
+    // Low ominous pulse
+    const o = this.createOsc(55, 'triangle', 0.3, 1.0)
+    if (!o) return
+    // Override envelope for pulse pattern
+    o.gain.gain.cancelScheduledValues(this.audioContext!.currentTime)
+    o.gain.gain.setValueAtTime(0, this.audioContext!.currentTime)
+    o.gain.gain.linearRampToValueAtTime(0.3, this.audioContext!.currentTime + 0.1)
+    o.gain.gain.linearRampToValueAtTime(0, this.audioContext!.currentTime + 0.5)
+    o.gain.gain.linearRampToValueAtTime(0.3, this.audioContext!.currentTime + 0.6)
+    o.gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext!.currentTime + 1.0)
+    o.osc.start()
+    o.osc.stop(this.audioContext!.currentTime + 1.0)
   }
 
-  private playWhooshSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Sweeping transition sound
-    osc.frequency.setValueAtTime(200, time)
-    osc.frequency.exponentialRampToValueAtTime(2000, time + 0.3)
-    osc.type = 'sawtooth'
-
-    filter.type = 'highpass'
-    filter.frequency.setValueAtTime(100, time)
-    filter.frequency.exponentialRampToValueAtTime(1000, time + 0.3)
-
-    gain.gain.setValueAtTime(0.2, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.4)
-
-    osc.stop(time + 0.4)
+  private playWhoosh() {
+    if (!this.audioContext) return
+    const o = this.createOsc(200, 'sawtooth', 0.2, 0.4)
+    if (!o) return
+    o.osc.frequency.exponentialRampToValueAtTime(2000, this.audioContext.currentTime + 0.3)
+    o.osc.start()
+    o.osc.stop(this.audioContext.currentTime + 0.4)
   }
 
-  private playDingSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Classic ding notification
-    osc.frequency.setValueAtTime(1047, time) // C6
-    osc.type = 'sine'
-
-    gain.gain.setValueAtTime(0.3, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.8)
-
-    osc.stop(time + 0.8)
+  private playDing() {
+    const o = this.createOsc(1047, 'sine', 0.3, 0.8)
+    if (!o) return
+    o.osc.start()
+    o.osc.stop(this.audioContext!.currentTime + 0.8)
   }
 
-  private playBuzzSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Game show buzzer
-    osc.frequency.setValueAtTime(150, time)
-    osc.type = 'square'
-
-    gain.gain.setValueAtTime(0.4, time)
-    gain.gain.setValueAtTime(0.4, time + 0.5)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 1.0)
-
-    osc.stop(time + 1.0)
+  private playBuzz() {
+    const o = this.createOsc(150, 'square', 0.4, 1.0)
+    if (!o) return
+    o.osc.start()
+    o.osc.stop(this.audioContext!.currentTime + 1.0)
   }
 
-  private playFanfareSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Victory fanfare
-    const melody = [523.25, 523.25, 523.25, 659.25, 783.99] // C5, C5, C5, E5, G5
-    osc.type = 'square'
-
+  private playFanfare() {
+    if (!this.audioContext) return
+    const melody = [523, 523, 523, 659, 784]
     melody.forEach((freq, i) => {
-      osc.frequency.setValueAtTime(freq, time + (i * 0.2))
+      setTimeout(() => {
+        const o = this.createOsc(freq, 'triangle', vol.fanfare, 0.5)
+        if (!o) return
+        o.osc.start()
+        o.osc.stop(this.audioContext!.currentTime + 0.5)
+      }, i * 150)
     })
-
-    gain.gain.setValueAtTime(0.35, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 1.2)
-
-    osc.stop(time + 1.2)
   }
 
-  private playHeartbeatSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Tension heartbeat for final seconds
-    osc.frequency.setValueAtTime(60, time)
-    osc.type = 'sine'
-
+  private playHeartbeat() {
+    if (!this.audioContext) return
     // Double beat pattern
-    gain.gain.setValueAtTime(0.0, time)
-    gain.gain.linearRampToValueAtTime(0.4, time + 0.05)
-    gain.gain.linearRampToValueAtTime(0.0, time + 0.15)
-    gain.gain.linearRampToValueAtTime(0.3, time + 0.25)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.4)
-
-    osc.stop(time + 0.4)
+    const o = this.createOsc(60, 'sine', 0.4, 0.4)
+    if (!o) return
+    o.gain.gain.cancelScheduledValues(this.audioContext.currentTime)
+    o.gain.gain.setValueAtTime(0, this.audioContext.currentTime)
+    o.gain.gain.linearRampToValueAtTime(0.4, this.audioContext.currentTime + 0.05)
+    o.gain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.15)
+    o.gain.gain.linearRampToValueAtTime(0.3, this.audioContext.currentTime + 0.25)
+    o.gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.4)
+    o.osc.start()
+    o.osc.stop(this.audioContext.currentTime + 0.4)
   }
 
-  private playClickSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // UI click sound
-    osc.frequency.setValueAtTime(1200, time)
-    osc.type = 'square'
-
-    gain.gain.setValueAtTime(0.1, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05)
-
-    osc.stop(time + 0.05)
+  private playClick() {
+    const o = this.createOsc(600, 'sine', vol.selection, 0.12)
+    if (!o) return
+    o.osc.start()
+    o.osc.stop(this.audioContext!.currentTime + 0.12)
   }
 
-  private playStreakSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Rising streak bonus sound
-    osc.frequency.setValueAtTime(440, time)
-    osc.frequency.exponentialRampToValueAtTime(880, time + 0.3)
-    osc.frequency.exponentialRampToValueAtTime(1760, time + 0.6)
-    osc.type = 'sine'
-
-    filter.frequency.setValueAtTime(2000, time)
-    filter.Q.setValueAtTime(3, time)
-
-    gain.gain.setValueAtTime(0.3, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.8)
-
-    osc.stop(time + 0.8)
+  private playStreak() {
+    if (!this.audioContext) return
+    // Rising notes
+    const notes = [440, 660, 880]
+    notes.forEach((freq, i) => {
+      setTimeout(() => {
+        const o = this.createOsc(freq, 'sine', 0.25, 0.3)
+        if (!o) return
+        o.osc.start()
+        o.osc.stop(this.audioContext!.currentTime + 0.3)
+      }, i * 100)
+    })
   }
 
-  private playAchievementSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Special achievement unlock sound
-    const chord = [523.25, 659.25, 783.99, 1046.50] // C major chord
-    osc.type = 'sine'
-
-    filter.frequency.setValueAtTime(4000, time)
-    filter.Q.setValueAtTime(1.5, time)
-
+  private playAchievement() {
+    if (!this.audioContext) return
+    // C major chord arpeggio
+    const chord = [523, 659, 784, 1047]
     chord.forEach((freq, i) => {
-      osc.frequency.setValueAtTime(freq, time + (i * 0.1))
+      setTimeout(() => {
+        const o = this.createOsc(freq, 'sine', 0.35, 0.6)
+        if (!o) return
+        o.osc.start()
+        o.osc.stop(this.audioContext!.currentTime + 0.6)
+      }, i * 100)
     })
-
-    gain.gain.setValueAtTime(0.4, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 1.5)
-
-    osc.stop(time + 1.5)
   }
 
-  private playTimeWarningSound(osc: OscillatorNode, gain: GainNode, time: number) {
-    // Urgent time warning beep
-    osc.frequency.setValueAtTime(1000, time)
-    osc.type = 'sine'
-
-    gain.gain.setValueAtTime(0.0, time)
-    gain.gain.linearRampToValueAtTime(0.5, time + 0.05)
-    gain.gain.linearRampToValueAtTime(0.0, time + 0.15)
-
-    osc.stop(time + 0.2)
+  private playTimeWarning() {
+    if (!this.audioContext) return
+    // Urgent beep with frequency wobble (from v1 playFinalCountdown)
+    const o = this.createOsc(1000, 'sawtooth', vol.timer * 1.5, 0.2)
+    if (!o) return
+    o.osc.frequency.linearRampToValueAtTime(1200, this.audioContext.currentTime + 0.05)
+    o.osc.frequency.linearRampToValueAtTime(1000, this.audioContext.currentTime + 0.15)
+    o.osc.start()
+    o.osc.stop(this.audioContext.currentTime + 0.2)
   }
 
-  private playGameStartSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Game show start sound
-    osc.frequency.setValueAtTime(220, time)
-    osc.frequency.exponentialRampToValueAtTime(880, time + 0.5)
-    osc.type = 'sawtooth'
-
-    filter.frequency.setValueAtTime(1000, time)
-    filter.frequency.exponentialRampToValueAtTime(4000, time + 0.5)
-
-    gain.gain.setValueAtTime(0.3, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 1.0)
-
-    osc.stop(time + 1.0)
-  }
-
-  private playGameEndSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Final resolution chord
-    const finalChord = [261.63, 329.63, 392.00, 523.25] // C4, E4, G4, C5
-    osc.type = 'sine'
-
-    filter.frequency.setValueAtTime(3000, time)
-    filter.Q.setValueAtTime(1, time)
-
-    finalChord.forEach((freq, i) => {
-      osc.frequency.setValueAtTime(freq, time + (i * 0.15))
+  private playGameStart() {
+    if (!this.audioContext) return
+    // Grand opening chord (from v1 playShowStart)
+    const chord = [262, 330, 392, 523]
+    chord.forEach(freq => {
+      const o = this.createOsc(freq, 'triangle', vol.fanfare, 1.8)
+      if (!o) return
+      o.osc.start()
+      o.osc.stop(this.audioContext!.currentTime + 1.8)
     })
-
-    gain.gain.setValueAtTime(0.4, time)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 2.0)
-
-    osc.stop(time + 2.0)
   }
 
-  private playParticipantJoinSound(osc: OscillatorNode, gain: GainNode, filter: BiquadFilterNode, time: number) {
-    // Friendly welcoming "pop" sound - two quick ascending notes
-    osc.type = 'sine'
-
-    // Quick ascending two-note motif (like a friendly "hello")
-    osc.frequency.setValueAtTime(880, time) // A5
-    osc.frequency.setValueAtTime(1108.73, time + 0.08) // C#6 - major third up
-
-    filter.frequency.setValueAtTime(4000, time)
-    filter.Q.setValueAtTime(1, time)
-
-    // Volume based on notification level
-    gain.gain.setValueAtTime(volumeLevels.notification, time)
-    gain.gain.exponentialRampToValueAtTime(volumeLevels.notification * 0.8, time + 0.08)
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.25)
-
-    osc.stop(time + 0.25)
+  private playGameEnd() {
+    if (!this.audioContext) return
+    // Victory melody (from v1 playQuizComplete)
+    const melody = [523, 659, 784, 880, 1047]
+    melody.forEach((freq, i) => {
+      setTimeout(() => {
+        const o = this.createOsc(freq, 'triangle', vol.fanfare, 0.5)
+        if (!o) return
+        o.osc.start()
+        o.osc.stop(this.audioContext!.currentTime + 0.5)
+      }, i * 150)
+    })
   }
 
-  // Utility method for chained sound sequences
+  private playParticipantJoin() {
+    if (!this.audioContext) return
+    // Two-note ascending pop
+    const o1 = this.createOsc(880, 'sine', vol.notification, 0.15)
+    if (!o1) return
+    o1.osc.start()
+    o1.osc.stop(this.audioContext.currentTime + 0.15)
+
+    setTimeout(() => {
+      const o2 = this.createOsc(1109, 'sine', vol.notification, 0.15)
+      if (!o2) return
+      o2.osc.start()
+      o2.osc.stop(this.audioContext!.currentTime + 0.15)
+    }, 80)
+  }
+
+  // Utility: play a sequence of sounds with delays
   async playSequence(sounds: { sound: SoundType; delay: number }[]) {
     for (const { sound, delay } of sounds) {
       setTimeout(() => this.play(sound), delay)
     }
   }
 
-  // Play background ambience (for tension building)
+  // Play ambient tension heartbeat
   playAmbientTension(duration: number = 10000) {
     if (!this.isEnabled || !this.audioContext) return
-
-    const interval = setInterval(() => {
-      this.play('heartbeat')
-    }, 1200) // Heartbeat every 1.2 seconds
-
-    setTimeout(() => {
-      clearInterval(interval)
-    }, duration)
-
+    const interval = setInterval(() => { this.play('heartbeat') }, 1200)
+    setTimeout(() => clearInterval(interval), duration)
     return interval
   }
 }
 
-// Singleton instance
+// Singleton
 export const soundSystem = new GameSoundSystem()
 
 // Hook for React components
 export const useGameSounds = (enabled: boolean = true) => {
   soundSystem.setEnabled(enabled)
-
   return {
     playSound: soundSystem.play.bind(soundSystem),
     playSequence: soundSystem.playSequence.bind(soundSystem),

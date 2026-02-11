@@ -6,6 +6,7 @@ import { useVisualEffects } from '../../lib/visualEffects'
 import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
 import { useGameTheme } from '../../hooks/useGameTheme'
+import { FirestoreService } from '../../lib/firestore'
 
 interface Difference {
   id: string
@@ -46,6 +47,8 @@ interface SpotTheDifferenceGameProps {
   participantName: string
   participants?: EngagementParticipant[]
   timeLimit: number
+  sessionId?: string
+  participantId?: string
 }
 
 interface GameStats {
@@ -75,7 +78,9 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
   onGameComplete,
   participantName,
   participants = [],
-  timeLimit
+  timeLimit,
+  sessionId,
+  participantId
 }) => {
   const [currentPairIndex, setCurrentPairIndex] = useState(0)
   const [timeRemaining, setTimeRemaining] = useState(timeLimit)
@@ -109,39 +114,26 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
   const currentPair = documentPairs[currentPairIndex]
   const totalDifferences = documentPairs.reduce((sum, pair) => sum + pair.differences.length, 0)
 
-  // Game start sound effect
+  // No game start sounds on phone - presenter handles them
   useEffect(() => {
-    playSound('gameStart')
-    playSequence([{ sound: 'ding', delay: 0 }, { sound: 'tick', delay: 100 }])
+    // Just initialize
   }, [])
 
-  // Timer effect with consistent tension buildup (matching Millionaire game)
+  // Timer - anchor-based (prevents drift)
+  // Timer sounds play on presenter only (phones are quiet)
+  const timerAnchorRef = useRef<number>(Date.now())
+
   useEffect(() => {
     if (timeRemaining > 0 && !gameComplete) {
       const timer = setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev === 61) {
-            playSound('timeWarning')
-          }
-          if (prev === 31) {
-            playSound('tension')
-          }
-          if (prev === 11) {
-            // Start tension music and heartbeat at 10 seconds
-            playAmbientTension(10000)
-            playSound('tension')
-          }
-          if (prev <= 5 && prev > 1) {
-            // Final countdown beeps
-            playSound('timeWarning')
-          }
-          if (prev <= 1) {
-            playSound('buzz')
-            endGame()
-            return 0
-          }
-          return prev - 1
-        })
+        const elapsed = Math.floor((Date.now() - timerAnchorRef.current) / 1000)
+        const remaining = Math.max(0, (timeLimit || 300) - elapsed)
+
+        setTimeRemaining(remaining)
+
+        if (remaining <= 0) {
+          endGame()
+        }
       }, 1000)
 
       return () => clearInterval(timer)
@@ -157,7 +149,6 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
 
       if (currentPairFound.length === currentPair.differences.length) {
         // All differences found in current document
-        playSound('achievement')
         triggerScreenEffect('celebration-confetti')
         setTimeout(() => {
           nextDocument()
@@ -190,16 +181,32 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
         return newScore
       })
 
-      setFoundDifferences(prev => [...prev, {
-        differenceId: difference.id,
-        timeFound: Date.now() - gameStartTime,
-        wasCorrect: true
-      }])
+      setFoundDifferences(prev => {
+        const newFound = [...prev, {
+          differenceId: difference.id,
+          timeFound: Date.now() - gameStartTime,
+          wasCorrect: true
+        }]
+        // Persist progress to Firestore
+        if (sessionId && participantId) {
+          const newScore = score + points
+          const firestoreAnswers = newFound.map(fd => ({
+            questionId: fd.differenceId,
+            selectedAnswer: fd.wasCorrect ? 1 : 0,
+            isCorrect: fd.wasCorrect,
+            timeSpent: Math.round(fd.timeFound / 1000)
+          }))
+          FirestoreService.updateParticipantGameState(
+            sessionId, participantId,
+            { currentQuestionIndex: currentPairIndex, score: newScore, streak: newFound.length, answers: firestoreAnswers }
+          ).catch(err => console.error('Error updating participant game state:', err))
+        }
+        return newFound
+      })
 
-      // Enhanced feedback with sound and visual effects
+      // Phone only gets correct/incorrect sounds
       playSound('correct')
       if (difference.severity === 'critical') {
-        playSound('achievement')
         triggerScreenEffect('screen-flash', { color: colors.success })
       }
 
@@ -210,7 +217,6 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
       showFeedback('correct', difference.explanation)
     } else if (difference && foundDifferences.some(fd => fd.differenceId === difference.id)) {
       // Already found this difference
-      playSound('click')
       showFeedback('already_found', 'You already found this difference!')
     } else {
       // Incorrect guess
@@ -263,7 +269,6 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
       return
     }
 
-    playSound('whoosh')
     setCurrentPairIndex(prev => prev + 1)
     setSelectedText(null)
     setFeedbackMessage(null) // Clear any existing feedback
@@ -272,13 +277,8 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
   const endGame = () => {
     setGameComplete(true)
 
-    // Play game end sounds
-    playSound('gameEnd')
-    setTimeout(() => {
-      playSound('fanfare')
-    }, 500)
-
-    // Celebration effects
+    // Game end sounds play on presenter only
+    // Visual celebration still shows on phone
     triggerScreenEffect('celebration-confetti')
 
     const timeSpent = (Date.now() - gameStartTime) / 1000
@@ -325,6 +325,26 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
 
     processGameCompletion(gameStatsForAchievements)
 
+    // Persist final state and mark completed in Firestore
+    if (sessionId && participantId) {
+      const normalizedScore = correctFinds * 100
+      const firestoreAnswers = foundDifferences.map(fd => ({
+        questionId: fd.differenceId,
+        selectedAnswer: fd.wasCorrect ? 1 : 0,
+        isCorrect: fd.wasCorrect,
+        timeSpent: Math.round(fd.timeFound / 1000)
+      }))
+
+      FirestoreService.updateParticipantGameState(
+        sessionId, participantId,
+        { currentQuestionIndex: currentPairIndex, score: normalizedScore, streak: correctFinds, completed: true, answers: firestoreAnswers }
+      ).catch(err => console.error('Error updating final game state:', err))
+
+      FirestoreService.markParticipantCompleted(
+        sessionId, participantId, normalizedScore, Math.round(timeSpent)
+      ).catch(err => console.error('Error marking participant completed:', err))
+    }
+
     setTimeout(() => {
       onGameComplete(score, stats)
     }, 3000)
@@ -359,19 +379,19 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
 
           const getWordStyle = (): React.CSSProperties => {
             if (isFound) {
-              return styles.wordFound
+              return { ...styles.wordFound, padding: '2px 4px', borderRadius: '4px' }
             }
             if (selectedText === word) {
               return {
                 backgroundColor: 'var(--primary-light-color)',
-                borderRadius: '2px',
-                padding: '0 2px'
+                borderRadius: '4px',
+                padding: '2px 4px'
               }
             }
             return {
               cursor: 'pointer',
-              borderRadius: '2px',
-              padding: '0 2px',
+              borderRadius: '4px',
+              padding: '2px 4px',
               transition: 'background-color 0.2s'
             }
           }
@@ -495,7 +515,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
               <Eye style={{ color: 'var(--primary-color)' }} size={24} />
               <div>
                 <h1 className="text-lg font-bold" style={{ color: 'var(--primary-color)' }}>Document Detective</h1>
-                <p className="text-xs" style={{ color: 'var(--text-secondary-color)' }}>{participantName}</p>
+                <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>{participantName}</p>
               </div>
             </div>
             <div className="flex items-center space-x-6 text-sm">
@@ -544,7 +564,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
               <p className="text-sm mb-2" style={{ color: 'var(--primary-color)' }}>
                 {currentPair.description}
               </p>
-              <div className="flex items-center space-x-4 text-xs" style={{ color: 'var(--primary-color)' }}>
+              <div className="flex items-center space-x-4 text-sm" style={{ color: 'var(--primary-color)' }}>
                 <span>Document {currentPairIndex + 1} of {documentPairs.length}</span>
                 <span>-</span>
                 <span>{currentPair.differences.length} differences to find</span>
@@ -573,7 +593,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
               <h3 className="font-bold" style={{ color: 'var(--success-color)' }}>
                 ✓ Original Document
               </h3>
-              <span className="text-xs" style={{ color: 'var(--text-secondary-color)' }}>
+              <span className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
                 Reference Version
               </span>
             </div>
@@ -581,7 +601,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
               className="rounded-lg p-4 max-h-96 overflow-y-auto"
               style={{ backgroundColor: 'var(--surface-color)' }}
             >
-              <div className="font-mono text-sm leading-relaxed" style={{ color: 'var(--text-color)' }}>
+              <div className="font-mono text-base leading-relaxed" style={{ color: 'var(--text-color)' }}>
                 {renderDocumentWithHighlights(currentPair.originalDocument, 'original')}
               </div>
             </div>
@@ -593,7 +613,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
               <h3 className="font-bold" style={{ color: 'var(--error-color)' }}>
                 ⚠ Modified Document
               </h3>
-              <span className="text-xs" style={{ color: 'var(--text-secondary-color)' }}>
+              <span className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
                 Review Version
               </span>
             </div>
@@ -601,7 +621,7 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
               className="rounded-lg p-4 max-h-96 overflow-y-auto"
               style={{ backgroundColor: 'var(--surface-color)' }}
             >
-              <div className="font-mono text-sm leading-relaxed" style={{ color: 'var(--text-color)' }}>
+              <div className="font-mono text-base leading-relaxed" style={{ color: 'var(--text-color)' }}>
                 {renderDocumentWithHighlights(currentPair.modifiedDocument, 'modified')}
               </div>
             </div>
@@ -659,7 +679,6 @@ export const SpotTheDifferenceGame: React.FC<SpotTheDifferenceGameProps> = ({
         showParticipantCount={true}
         showAnswerProgress={true}
         onReaction={(reaction) => {
-          playSound('click')
           console.log('Player reacted with:', reaction)
         }}
       />

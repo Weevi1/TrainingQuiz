@@ -341,6 +341,8 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
           participantName={participantName}
           participants={engagementParticipants}
           timeLimit={45} // 45 seconds per question
+          sessionId={sessionId}
+          participantId={participantId}
         />
       )
 
@@ -372,6 +374,8 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
           timeLimit={gameData.timeLimit || 300} // 5 minutes default
           questionTimeLimit={8} // 8 seconds per question
           enableSkip={true}
+          sessionId={sessionId}
+          participantId={participantId}
         />
       )
 
@@ -383,6 +387,8 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
           participantName={participantName}
           participants={engagementParticipants}
           timeLimit={gameData.timeLimit || 600} // 10 minutes default
+          sessionId={sessionId}
+          participantId={participantId}
         />
       )
 

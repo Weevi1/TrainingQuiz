@@ -6,6 +6,7 @@ import { useVisualEffects } from '../../lib/visualEffects'
 import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
 import { useGameTheme, getCorrectStyle, getIncorrectStyle, getSelectedStyle } from '../../hooks/useGameTheme'
+import { FirestoreService } from '../../lib/firestore'
 
 interface MillionaireQuestion {
   id: string
@@ -39,6 +40,8 @@ interface MillionaireGameProps {
   timeLimit?: number
   participantName: string
   participants?: EngagementParticipant[]
+  sessionId?: string
+  participantId?: string
 }
 
 const MONEY_LADDER = [
@@ -64,7 +67,9 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
   onGameComplete,
   timeLimit = 30,
   participantName,
-  participants = []
+  participants = [],
+  sessionId,
+  participantId
 }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [currentWinnings, setCurrentWinnings] = useState(0)
@@ -81,6 +86,9 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
   const [removedAnswers, setRemovedAnswers] = useState<number[]>([])
   const [audienceResults, setAudienceResults] = useState<number[] | null>(null)
   const [friendAdvice, setFriendAdvice] = useState<string | null>(null)
+
+  // Track answers for Firestore persistence
+  const answersRef = useRef<Array<{ questionId: string; selectedAnswer: number; isCorrect: boolean; timeSpent: number }>>([])
 
   // Theme hook - all colors come from CSS variables
   const { styles, colors } = useGameTheme('millionaire')
@@ -107,50 +115,30 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
   const currentLevel = Math.min(currentQuestionIndex + 1, MONEY_LADDER.length)
   const potentialWinnings = MONEY_LADDER[currentLevel - 1]?.amount || 0
 
-  // Enhanced timer effect with sound and visual feedback
+  // Per-question timer - anchor-based (prevents drift)
+  // Timer sounds play on presenter only (phones are quiet)
+  const questionStartedAtRef = useRef<number>(Date.now())
+
   useEffect(() => {
     if (!answerSubmitted && !gameOver && timeRemaining > 0) {
       const timer = setInterval(() => {
-        setTimeRemaining(prev => {
-          // Timer warning sounds and effects
-          if (prev === 11) {
-            // Start tension music at 10 seconds
-            tensionIntervalRef.current = playAmbientTension(10000)
-            playSound('tension')
-          }
+        const elapsed = Math.floor((Date.now() - questionStartedAtRef.current) / 1000)
+        const remaining = Math.max(0, timeLimit - elapsed)
 
-          if (prev <= 5 && prev > 1) {
-            // Final countdown beeps
-            playSound('timeWarning')
-          }
+        setTimeRemaining(remaining)
 
-          if (prev <= 1) {
-            // Time's up!
-            playSound('buzz')
-            handleTimeUp()
-            return 0
-          }
-
-          // Regular tick sound
-          if (prev <= 10) {
-            playSound('tick')
-          }
-
-          return prev - 1
-        })
+        if (remaining <= 0) {
+          handleTimeUp()
+        }
       }, 1000)
 
       return () => clearInterval(timer)
     }
   }, [answerSubmitted, gameOver, timeRemaining])
 
-  // Game start effect
+  // No game start sounds on phone - presenter handles them
   useEffect(() => {
-    playSound('gameStart')
-    playSequence([
-      { sound: 'ding', delay: 1000 },
-      { sound: 'whoosh', delay: 1500 }
-    ])
+    // Just initialize
   }, [])
 
   const handleTimeUp = () => {
@@ -175,14 +163,36 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
 
     const isCorrect = answerIndex === currentQuestion.correctAnswer
     const answerButton = answerButtonRefs.current[answerIndex]
+    const timeSpent = timeLimit - timeRemaining
 
-    // Immediate feedback
-    playSound('click')
+    // Track answer for Firestore
+    const answerRecord = {
+      questionId: currentQuestion.id,
+      selectedAnswer: answerIndex,
+      isCorrect,
+      timeSpent
+    }
+    answersRef.current = [...answersRef.current, answerRecord]
 
-    // Dramatic pause with tension
+    // Persist to Firestore (fire-and-forget, don't block UI)
+    if (sessionId && participantId) {
+      const newScore = isCorrect ? potentialWinnings : currentWinnings
+      FirestoreService.updateParticipantGameState(
+        sessionId,
+        participantId,
+        {
+          currentQuestionIndex,
+          score: newScore,
+          streak: isCorrect ? currentQuestionIndex + 1 : 0,
+          answers: answersRef.current
+        }
+      ).catch(err => console.error('Error updating participant game state:', err))
+    }
+
+    // Dramatic pause then feedback (phone only gets correct/incorrect sounds)
     setTimeout(() => {
       if (isCorrect) {
-        // CORRECT ANSWER - Epic celebration!
+        // CORRECT ANSWER
         playSound('correct')
         if (answerButton) {
           applyEffect(answerButton, 'correct-pulse')
@@ -194,11 +204,9 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
           animateScoreCounter(scoreCounterRef.current, currentWinnings, potentialWinnings, 1500)
         }
 
-        // Different celebration based on level
+        // Visual celebration for major milestones (no extra sounds on phone)
         if (currentLevel >= 5) {
-          // Major milestone
           setTimeout(() => {
-            playSound('fanfare')
             triggerScreenEffect('celebration-confetti')
           }, 1000)
         }
@@ -209,26 +217,25 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
           setCurrentWinnings(newWinnings)
 
           if (currentQuestionIndex + 1 >= questions.length || currentLevel >= MONEY_LADDER.length) {
-            // MILLIONAIRE! Ultimate celebration
+            // MILLIONAIRE! Winner gets celebration sounds
             setIsWinner(true)
             playSequence([
-              { sound: 'achievement', delay: 0 },
+              { sound: 'fanfare', delay: 0 },
               { sound: 'celebration', delay: 500 },
-              { sound: 'fanfare', delay: 1000 }
+              { sound: 'achievement', delay: 1000 }
             ])
             triggerScreenEffect('achievement-burst')
             endGame(true)
           } else {
             // Next question
             setTimeout(() => {
-              playSound('whoosh')
               nextQuestion()
             }, 1000)
           }
         }, 2000)
 
       } else {
-        // WRONG ANSWER - Dramatic failure
+        // WRONG ANSWER
         playSound('incorrect')
         if (answerButton) {
           applyEffect(answerButton, 'wrong-shake')
@@ -244,7 +251,6 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
         }
 
         setTimeout(() => {
-          playSound('gameEnd')
           endGame(false)
         }, 3000)
       }
@@ -252,6 +258,7 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
   }
 
   const nextQuestion = () => {
+    questionStartedAtRef.current = Date.now()
     setCurrentQuestionIndex(prev => prev + 1)
     setSelectedAnswer(null)
     setAnswerSubmitted(false)
@@ -289,6 +296,33 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
     }
 
     processGameCompletion(gameStats)
+
+    // Persist final state and mark completed in Firestore
+    if (sessionId && participantId) {
+      const totalTime = answersRef.current.reduce((sum, a) => sum + a.timeSpent, 0)
+      const correctCount = answersRef.current.filter(a => a.isCorrect).length
+      // Use correctCount * 100 as score for consistency with quiz scoring (100 points per correct answer)
+      const normalizedScore = correctCount * 100
+
+      FirestoreService.updateParticipantGameState(
+        sessionId,
+        participantId,
+        {
+          currentQuestionIndex: currentQuestionIndex,
+          score: normalizedScore,
+          streak: currentLevel,
+          completed: true,
+          answers: answersRef.current
+        }
+      ).catch(err => console.error('Error updating final game state:', err))
+
+      FirestoreService.markParticipantCompleted(
+        sessionId,
+        participantId,
+        normalizedScore,
+        totalTime
+      ).catch(err => console.error('Error marking participant completed:', err))
+    }
 
     setTimeout(() => {
       onGameComplete(currentLevel, finalWinnings)
@@ -659,7 +693,7 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
                             }}
                           />
                         </div>
-                        <div className="text-xs">{percentage}%</div>
+                        <div className="text-sm">{percentage}%</div>
                       </div>
                     ))}
                   </div>
@@ -727,10 +761,10 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
                       style={getLevelStyle()}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-xs">{level.level}</span>
+                        <span className="text-sm">{level.level}</span>
                         <span className="font-bold">${level.amount.toLocaleString()}</span>
                         {level.isSafe && (
-                          <AlertTriangle size={12} style={{ color: 'var(--warning-color)' }} />
+                          <AlertTriangle size={14} style={{ color: 'var(--warning-color)' }} />
                         )}
                       </div>
                     </div>
@@ -766,7 +800,6 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
         showParticipantCount={true}
         showAnswerProgress={true}
         onReaction={(reaction) => {
-          playSound('click')
           console.log('Player reacted with:', reaction)
         }}
       />

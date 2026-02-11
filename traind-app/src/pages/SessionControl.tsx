@@ -1,18 +1,25 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import QRCode from 'react-qr-code'
 import {
-  Play, Pause, Square, Users, Clock, Download,
+  Play, Pause, Square, Users, Clock,
   QrCode, ArrowLeft,
-  Zap, Trophy, Target, X, Medal, Star, Award
+  Zap, Trophy, Target, X, Medal, Star
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { FirestoreService, type GameSession, type Quiz, type Participant } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { soundSystem } from '../lib/soundSystem'
+import { CountdownOverlay } from '../components/CountdownOverlay'
 import { calculateSessionAwards, calculateBingoAwards, type Award, type AwardResults } from '../lib/awardCalculator'
-import { generateSessionPDF } from '../lib/pdfExport'
-import { downloadAttendanceCertificate } from '../lib/attendanceCertificate'
+import { generateDebugParticipants } from '../lib/debugData'
+import { StagedReveal, RevealSlot, type RevealPhase } from '../components/presenter/StagedReveal'
+import ResultsPodium from '../components/presenter/ResultsPodium'
+import AwardsCeremony from '../components/presenter/AwardsCeremony'
+import { PresenterLeaderboard } from '../components/presenter/PresenterLeaderboard'
+import { PresenterStats } from '../components/presenter/PresenterStats'
+import { PresenterCanvas } from '../components/presenter/PresenterCanvas'
+import { usePresenterSounds } from '../hooks/usePresenterSounds'
 
 type SessionStatus = 'waiting' | 'active' | 'paused' | 'completed'
 
@@ -26,37 +33,98 @@ interface SessionStats {
 
 export const SessionControl: React.FC = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const { sessionId } = useParams<{ sessionId: string }>()
   const { user, currentOrganization, hasPermission } = useAuth()
+  const isMuted = (location.state as any)?.muteSound === true
 
-  const [session, setSession] = useState<GameSession | null>(null)
-  const [quiz, setQuiz] = useState<Quiz | null>(null)
-  const [participants, setParticipants] = useState<Participant[]>([])
-  const [sessionStats, setSessionStats] = useState<SessionStats>({
-    totalParticipants: 0,
-    averageScore: 0,
-    completionRate: 0,
-    averageTime: 0,
-    completedCount: 0
+  // Debug mode: /debug/results or ?debug=true on any session URL
+  const searchParams = new URLSearchParams(location.search)
+  const isDebugMode = searchParams.get('debug') === 'true' || location.pathname === '/debug/results'
+
+  // Pre-compute debug data so initial state is populated (no flash of "not found")
+  const debugData = useMemo(() => isDebugMode ? generateDebugParticipants(15) : null, [isDebugMode])
+
+  const [session, setSession] = useState<GameSession | null>(debugData?.session ?? null)
+  const [quiz, setQuiz] = useState<Quiz | null>(debugData?.quiz ?? null)
+  const [participants, setParticipants] = useState<Participant[]>(debugData?.participants ?? [])
+  const [sessionStats, setSessionStats] = useState<SessionStats>(() => {
+    if (!debugData) return { totalParticipants: 0, averageScore: 0, completionRate: 0, averageTime: 0, completedCount: 0 }
+    const p = debugData.participants
+    const totalScores = p.reduce((sum, pp) => sum + (pp.gameState?.score || 0), 0)
+    const completed = p.filter(pp => pp.completed)
+    const allAnswers = p.flatMap(pp => pp.gameState?.answers || [])
+    const avgTime = allAnswers.length > 0 ? allAnswers.reduce((sum, a) => sum + a.timeSpent, 0) / allAnswers.length : 0
+    return {
+      totalParticipants: p.length,
+      averageScore: Math.round(totalScores / p.length),
+      completionRate: Math.round((completed.length / p.length) * 100),
+      averageTime: Math.round(avgTime),
+      completedCount: completed.length,
+    }
   })
 
   const [timeRemaining, setTimeRemaining] = useState(30)
   const [isTimerRunning, setIsTimerRunning] = useState(false)
   const timerStartedAtRef = useRef<number>(0)       // Anchor: Date.now() when timer started
   const sessionTimeLimitRef = useRef<number>(300)    // Total session time in seconds
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!isDebugMode)
   const [showQRCode, setShowQRCode] = useState(false)
   const [showFullscreenQR, setShowFullscreenQR] = useState(false)
   const [participantCountAnimating, setParticipantCountAnimating] = useState(false)
   const [qrSize, setQrSize] = useState(180)
   const previousParticipantCount = useRef(0)
 
+  // Ref for quiz — used by updateSessionStats to avoid stale closures in onSnapshot callback
+  const quizRef = useRef<Quiz | null>(quiz)
+  useEffect(() => { quizRef.current = quiz }, [quiz])
+
   // Detect if this is a bingo session
   const isBingoSession = session?.gameType === 'bingo'
 
-  // Calculate awards when session is completed
-  const awardResults = useMemo<AwardResults>(() => {
+  // Timeout fallback: if results data hasn't arrived after 10s, show whatever we have
+  const [resultsTimedOut, setResultsTimedOut] = useState(false)
+  useEffect(() => {
     if (session?.status !== 'completed') {
+      setResultsTimedOut(false)
+      return
+    }
+    const timeout = setTimeout(() => setResultsTimedOut(true), 10000)
+    return () => clearTimeout(timeout)
+  }, [session?.status])
+
+  const [revealPhase, setRevealPhase] = useState<RevealPhase>('splash')
+  const [debugRevealKey, setDebugRevealKey] = useState(0)
+
+  // Check if participant results data has fully propagated to Firestore
+  // After session completes, gameState.answers may arrive slightly after the completed flag
+  const dataFullyLoaded = useMemo(() => {
+    if (session?.status !== 'completed') return false
+    if (participants.length === 0) return true
+
+    // For bingo sessions, check for bingo-specific game state
+    if (isBingoSession) {
+      return participants.every(p =>
+        p.gameState && (p.gameState.gameWon !== undefined || p.gameState.cellsMarked !== undefined)
+      )
+    }
+
+    // For quiz sessions, check that completed participants have their answers populated
+    const completedParticipants = participants.filter(p => p.completed || p.gameState?.completed)
+    if (completedParticipants.length === 0) return true
+
+    return completedParticipants.every(p => {
+      const answers = p.gameState?.answers
+      return (answers && answers.length > 0) || (p.gameState?.score && p.gameState.score > 0) || (p.finalScore && p.finalScore > 0)
+    })
+  }, [session?.status, participants, isBingoSession])
+
+  // Results are ready when data has loaded OR the timeout has elapsed
+  const resultsReady = dataFullyLoaded || resultsTimedOut
+
+  // Calculate awards when session is completed AND data is ready
+  const awardResults = useMemo<AwardResults>(() => {
+    if (session?.status !== 'completed' || !resultsReady) {
       return { awards: [], topPerformers: [] }
     }
     if (isBingoSession) {
@@ -66,7 +134,13 @@ export const SessionControl: React.FC = () => {
       return { awards: [], topPerformers: [] }
     }
     return calculateSessionAwards(participants, quiz.questions.length)
-  }, [session?.status, participants, quiz, isBingoSession])
+  }, [session?.status, participants, quiz, isBingoSession, resultsReady])
+
+  // Presenter celebration sounds synced with staged reveal phases
+  usePresenterSounds(revealPhase, {
+    enabled: !isMuted && session?.status === 'completed' && resultsReady,
+    awardsCount: awardResults.awards.length
+  })
 
   // Helper function to get award icon component
   const getAwardIcon = (iconType: string, size: number = 20) => {
@@ -97,23 +171,72 @@ export const SessionControl: React.FC = () => {
     return () => window.removeEventListener('resize', updateQrSize)
   }, [])
 
-  // Check permissions
+  // Mute sounds on the trainer's window (projector popup plays sounds)
   useEffect(() => {
+    if (isMuted) {
+      soundSystem.setEnabled(false)
+    }
+    return () => {
+      soundSystem.setEnabled(true)
+    }
+  }, [isMuted])
+
+  // Check permissions (skip in debug mode)
+  useEffect(() => {
+    if (isDebugMode) return
     if (!hasPermission('create_sessions')) {
       navigate('/dashboard')
       return
     }
-  }, [hasPermission, navigate])
+  }, [hasPermission, navigate, isDebugMode])
 
-  // Load session data
+  // Load session data (initial fetch for quiz + timer setup)
   useEffect(() => {
+    if (isDebugMode) return
     if (sessionId) {
       loadSession()
     }
-  }, [sessionId])
+  }, [sessionId, isDebugMode])
+
+  // Real-time session subscription (syncs status/timer across windows)
+  useEffect(() => {
+    if (isDebugMode) return
+    if (!sessionId || loading) return
+
+    const unsubscribe = FirestoreService.subscribeToSession(sessionId, (updatedSession) => {
+      if (!updatedSession) return
+
+      setSession(updatedSession)
+
+      // Sync timer state from Firestore when session becomes active
+      if (updatedSession.status === 'active' && updatedSession.timerStartedAt) {
+        timerStartedAtRef.current = updatedSession.timerStartedAt
+        if (updatedSession.sessionTimeLimit) {
+          sessionTimeLimitRef.current = updatedSession.sessionTimeLimit
+        }
+
+        if (updatedSession.timerPaused) {
+          setIsTimerRunning(false)
+          setTimeRemaining(updatedSession.pausedTimeRemaining || sessionTimeLimitRef.current)
+        } else {
+          const elapsed = Math.floor((Date.now() - updatedSession.timerStartedAt) / 1000)
+          const remaining = Math.max(0, sessionTimeLimitRef.current - elapsed)
+          setTimeRemaining(remaining)
+          if (remaining > 0) {
+            setIsTimerRunning(true)
+          }
+        }
+      } else if (updatedSession.status === 'completed') {
+        setIsTimerRunning(false)
+      }
+    })
+
+    return unsubscribe
+  }, [sessionId, loading])
 
   // Real-time participants subscription
   useEffect(() => {
+    if (isDebugMode) return
     if (!sessionId) return
 
     const unsubscribe = FirestoreService.subscribeToSessionParticipants(
@@ -135,6 +258,13 @@ export const SessionControl: React.FC = () => {
 
     return unsubscribe
   }, [sessionId])
+
+  // Recalculate stats when quiz loads (fixes stale completion data from before quiz was available)
+  useEffect(() => {
+    if (quiz && participants.length > 0) {
+      updateSessionStats(participants)
+    }
+  }, [quiz])
 
   // Timer logic - anchor-based calculation (prevents drift, syncs with participants)
   // Instead of decrementing, we calculate: remaining = timeLimit - elapsed
@@ -171,7 +301,7 @@ export const SessionControl: React.FC = () => {
 
     const allCompleted = participants.every(p =>
       p.completed || p.gameState?.completed ||
-      (p.gameState?.answers?.length || 0) >= (quiz?.questions.length || 0)
+      (p.gameState?.answers?.length || 0) >= (quiz?.questions.length || Infinity)
     )
 
     if (allCompleted && quiz) {
@@ -289,16 +419,21 @@ export const SessionControl: React.FC = () => {
     }
 
     const participantsWithGameState = participants.filter(p => p.gameState)
-    const totalScores = participantsWithGameState.reduce((sum, p) => sum + (p.gameState?.score || 0), 0)
+    // Use gameState.score, falling back to finalScore (written by markParticipantCompleted)
+    const totalScores = participantsWithGameState.reduce((sum, p) =>
+      sum + (p.gameState?.score || p.finalScore || 0), 0)
     const averageScore = participantsWithGameState.length > 0 ? totalScores / participantsWithGameState.length : 0
 
     // Completion detection differs by game type
+    // Use quizRef to avoid stale closure (this runs inside onSnapshot callback)
+    const currentQuiz = quizRef.current
     const completedParticipants = participants.filter(p => {
       if (p.completed || p.gameState?.completed) return true
       if (isBingoSession) {
         return p.gameState?.gameWon || p.gameState?.fullCardAchieved
       }
-      return (p.gameState?.answers?.length || 0) >= (quiz?.questions.length || 0)
+      // Use Infinity fallback: if quiz not yet loaded, no one is "completed"
+      return (p.gameState?.answers?.length || 0) >= (currentQuiz?.questions.length || Infinity)
     })
     const completionRate = participants.length > 0 ? (completedParticipants.length / participants.length) * 100 : 0
 
@@ -499,63 +634,6 @@ export const SessionControl: React.FC = () => {
     return `${Math.round((rawScore / (quiz.questions.length * 100)) * 100)}%`
   }
 
-  // Export PDF report
-  const handleExportPDF = async () => {
-    if (!session || !quiz) return
-
-    try {
-      soundSystem.play('click')
-      await generateSessionPDF(
-        session,
-        quiz,
-        participants,
-        awardResults,
-        currentOrganization?.name || 'Trained Platform'
-      )
-      soundSystem.play('celebration')
-    } catch (error) {
-      console.error('Error generating PDF:', error)
-      alert('Failed to generate PDF report. Please try again.')
-    }
-  }
-
-  // Bulk download attendance certificates for all participants
-  const handleBulkAttendanceCertificates = async () => {
-    if (!session) return
-    soundSystem.play('click')
-    for (const participant of participants) {
-      await downloadAttendanceCertificate({
-        participantName: participant.name,
-        sessionTitle: session.title,
-        completionDate: new Date(),
-        organizationName: currentOrganization?.name,
-        organizationLogo: currentOrganization?.branding?.logo,
-        sessionCode: session.code,
-        primaryColor: currentOrganization?.branding?.primaryColor,
-        secondaryColor: currentOrganization?.branding?.secondaryColor
-      })
-      // Brief delay between downloads to prevent browser blocking
-      await new Promise(resolve => setTimeout(resolve, 300))
-    }
-    soundSystem.play('celebration')
-  }
-
-  // Download single participant attendance certificate
-  const handleSingleAttendanceCertificate = async (participantName: string) => {
-    if (!session) return
-    soundSystem.play('click')
-    await downloadAttendanceCertificate({
-      participantName,
-      sessionTitle: session.title,
-      completionDate: new Date(),
-      organizationName: currentOrganization?.name,
-      organizationLogo: currentOrganization?.branding?.logo,
-      sessionCode: session.code,
-      primaryColor: currentOrganization?.branding?.primaryColor,
-      secondaryColor: currentOrganization?.branding?.secondaryColor
-    })
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -583,6 +661,16 @@ export const SessionControl: React.FC = () => {
   const sessionUrl = `${window.location.origin}/join/${session.code}`
 
   return (
+    <>
+    {/* Countdown overlay on presenter screen (3-2-1-GO!) */}
+    {session?.status === 'countdown' && (
+      <CountdownOverlay
+        onComplete={() => {}}
+        startFrom={3}
+        sessionTitle={session.title}
+      />
+    )}
+
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="bg-surface border-b border-border">
@@ -645,854 +733,419 @@ export const SessionControl: React.FC = () => {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* WAITING STATE: Show lobby focused on participants */}
+      <div
+        className="overflow-hidden relative"
+        style={{ height: 'calc(100vh - 4rem)' }}
+      >
+        <PresenterCanvas>
+            {/* WAITING STATE: Full-width lobby for projector */}
             {session.status === 'waiting' && (
-              <>
-                {/* Participants Panel - Main focus during waiting */}
-                <div className="card">
-                  <div className="flex justify-between items-center mb-6">
-                    <div className="flex items-center space-x-3">
-                      <div className="p-2 rounded-lg" style={{ backgroundColor: 'var(--primary-color)' }}>
-                        <Users size={20} style={{ color: 'var(--text-on-primary-color, white)' }} />
-                      </div>
-                      <div>
-                        <h2 className="text-xl font-bold">Participants</h2>
-                        <p className="text-sm text-text-secondary">Waiting to join</p>
-                      </div>
+              <div className="h-full flex flex-col p-10">
+                {/* Session title */}
+                <div className="text-center mb-6">
+                  <h1 className="text-5xl font-bold" style={{ color: 'var(--text-color)' }}>
+                    {session.title}
+                  </h1>
+                </div>
+
+                {/* Main: QR hero + Participants */}
+                <div className="flex-1 flex gap-12 min-h-0">
+                  {/* Left: QR Code hero */}
+                  <div className="flex flex-col items-center justify-center" style={{ width: '40%' }}>
+                    <div className="text-2xl font-medium mb-5" style={{ color: 'var(--text-secondary-color)' }}>
+                      Scan to join
                     </div>
-                    <div
-                      className={`px-3 py-1 rounded-full text-sm font-medium transition-all duration-300 ${
-                        participantCountAnimating ? 'scale-125 ring-2 ring-offset-2' : ''
-                      }`}
-                      style={{
-                        backgroundColor: 'var(--info-bg-color, #dbeafe)',
-                        color: 'var(--info-color, #1e40af)',
-                        ringColor: 'var(--info-color, #1e40af)'
-                      }}
-                    >
-                      {participants.length} joined
+                    <div className="p-5 rounded-2xl bg-white shadow-lg">
+                      <QRCode value={sessionUrl} size={320} level="M" />
+                    </div>
+                    <div className="mt-5 text-center">
+                      <div className="text-lg break-all" style={{ color: 'var(--text-secondary-color)', opacity: 0.7 }}>
+                        {sessionUrl}
+                      </div>
                     </div>
                   </div>
 
-                  {participants.length === 0 ? (
-                    <div className="text-center py-12">
-                      <div
-                        className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
-                        style={{ backgroundColor: 'var(--surface-color)' }}
-                      >
-                        <Users size={32} className="text-text-secondary" />
-                      </div>
-                      <p className="text-lg font-medium mb-2">Waiting for participants</p>
-                      <p className="text-text-secondary">Share the QR code or session code to let participants join</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                      {participants.map((participant, index) => (
-                        <div
-                          key={participant.id}
-                          className="flex items-center justify-between p-3 rounded-lg transition-all duration-300 group"
-                          style={{
-                            backgroundColor: 'var(--surface-color)',
-                            animation: 'fadeIn 0.3s ease-out'
-                          }}
-                        >
-                          <div className="flex items-center space-x-2 min-w-0">
-                            <div className="relative flex-shrink-0">
-                              <div
-                                className="w-8 h-8 rounded-full flex items-center justify-center text-lg"
-                                style={{ backgroundColor: 'var(--primary-light-color)', color: 'var(--text-on-primary-color, white)' }}
-                              >
-                                {(participant as any).avatar || '😀'}
-                              </div>
-                              {/* Status indicator dot */}
-                              <div
-                                className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2"
-                                style={{
-                                  backgroundColor: participant.isReady ? 'var(--success-color, #22c55e)' : 'var(--warning-color, #eab308)',
-                                  borderColor: 'var(--surface-color)'
-                                }}
-                                title={participant.isReady ? 'Ready' : 'Joining...'}
-                              />
-                            </div>
-                            <span className="font-medium truncate">{participant.name}</span>
-                          </div>
-                          {/* Kick button - shows on hover */}
-                          <button
-                            onClick={() => kickParticipant(participant.id, participant.name)}
-                            className="opacity-0 group-hover:opacity-100 p-1 rounded transition-all hover:bg-red-100"
-                            style={{ color: 'var(--error-color, #ef4444)' }}
-                            title={`Remove ${participant.name}`}
-                          >
-                            <X size={16} />
-                          </button>
+                  {/* Right: Participants */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="flex items-center justify-between mb-5">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 rounded-xl" style={{ backgroundColor: 'var(--primary-color)' }}>
+                          <Users size={28} style={{ color: 'var(--text-on-primary-color, white)' }} />
                         </div>
-                      ))}
+                        <h2 className="text-3xl font-bold" style={{ color: 'var(--text-color)' }}>
+                          Participants
+                        </h2>
+                      </div>
+                      <div
+                        className={`px-5 py-2 rounded-full text-2xl font-bold transition-all duration-300 ${
+                          participantCountAnimating ? 'scale-110' : ''
+                        }`}
+                        style={{
+                          backgroundColor: 'var(--primary-color)',
+                          color: 'var(--text-on-primary-color, white)'
+                        }}
+                      >
+                        {participants.length}
+                      </div>
                     </div>
-                  )}
+
+                    {participants.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center" style={{ opacity: 0.5 }}>
+                        <Users size={80} style={{ color: 'var(--text-secondary-color)' }} />
+                        <p className="text-2xl mt-6" style={{ color: 'var(--text-secondary-color)' }}>
+                          Waiting for participants...
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex-1 overflow-y-auto">
+                        <div className="grid grid-cols-3 gap-3">
+                          {participants.map((participant) => (
+                            <div
+                              key={participant.id}
+                              className="flex items-center gap-3 p-4 rounded-xl group"
+                              style={{
+                                backgroundColor: 'var(--surface-color)',
+                                animation: 'fadeIn 0.3s ease-out'
+                              }}
+                            >
+                              <div className="relative flex-shrink-0">
+                                <div
+                                  className="w-12 h-12 rounded-full flex items-center justify-center text-2xl"
+                                  style={{ backgroundColor: 'var(--primary-light-color)' }}
+                                >
+                                  {(participant as any).avatar || '\u{1F600}'}
+                                </div>
+                                <div
+                                  className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full border-2"
+                                  style={{
+                                    backgroundColor: 'var(--success-color, #22c55e)',
+                                    borderColor: 'var(--surface-color)'
+                                  }}
+                                />
+                              </div>
+                              <span className="text-xl font-medium truncate" style={{ color: 'var(--text-color)' }}>
+                                {participant.name}
+                              </span>
+                              <button
+                                onClick={() => kickParticipant(participant.id, participant.name)}
+                                className="opacity-0 group-hover:opacity-100 ml-auto p-1 rounded transition-all"
+                                style={{ color: 'var(--error-color, #ef4444)' }}
+                                title={`Remove ${participant.name}`}
+                              >
+                                <X size={20} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Game Info */}
-                <div className="card">
-                  <h3 className="font-semibold mb-4">{isBingoSession ? 'Bingo Details' : 'Quiz Details'}</h3>
+                {/* Bottom info strip */}
+                <div
+                  className="flex items-center justify-center gap-8 mt-5 py-4 rounded-xl"
+                  style={{ backgroundColor: 'var(--surface-color)' }}
+                >
                   {isBingoSession ? (
-                    <div className="grid grid-cols-3 gap-4 text-center">
-                      <div>
-                        <div className="text-2xl font-bold text-primary">5x5</div>
-                        <div className="text-sm text-text-secondary">Card Size</div>
+                    <>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Card Size</span>
+                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>5x5</span>
                       </div>
-                      <div>
-                        <div className="text-2xl font-bold text-primary">Line</div>
-                        <div className="text-sm text-text-secondary">Win Condition</div>
+                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Win</span>
+                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>Line</span>
                       </div>
-                      <div>
-                        <div className="text-2xl font-bold text-primary">{formatTime(session.settings?.timeLimit || 900)}</div>
-                        <div className="text-sm text-text-secondary">Time Limit</div>
+                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="flex items-center gap-3">
+                        <Clock size={24} style={{ color: 'var(--text-secondary-color)' }} />
+                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                          {formatTime(session.settings?.timeLimit || 900)}
+                        </span>
                       </div>
-                    </div>
+                    </>
                   ) : (
-                    <div className="grid grid-cols-3 gap-4 text-center">
-                      <div>
-                        <div className="text-2xl font-bold text-primary">{quiz.questions.length}</div>
-                        <div className="text-sm text-text-secondary">Questions</div>
+                    <>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Questions</span>
+                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>{quiz.questions.length}</span>
                       </div>
-                      <div>
-                        <div className="text-2xl font-bold text-primary">{quiz.timeLimit}s</div>
-                        <div className="text-sm text-text-secondary">Per Question</div>
+                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Per Question</span>
+                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>{quiz.timeLimit}s</span>
                       </div>
-                      <div>
-                        <div className="text-2xl font-bold text-primary">{formatTime(quiz.timeLimit * quiz.questions.length)}</div>
-                        <div className="text-sm text-text-secondary">Total Time</div>
+                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="flex items-center gap-3">
+                        <Clock size={24} style={{ color: 'var(--text-secondary-color)' }} />
+                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                          {formatTime(quiz.timeLimit * quiz.questions.length)}
+                        </span>
                       </div>
-                    </div>
+                    </>
                   )}
                 </div>
-              </>
+              </div>
             )}
 
             {/* COMPLETED STATE: Show results and awards */}
             {session.status === 'completed' && (
-              <>
-                {/* Action Bar */}
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-bold" style={{ color: 'var(--text-color)' }}>
-                    Session Complete
-                  </h2>
-                  <div className="flex items-center space-x-2">
-                    {currentOrganization?.settings?.enableAttendanceCertificates && (
-                      <button
-                        onClick={handleBulkAttendanceCertificates}
-                        className="btn-secondary flex items-center space-x-2"
-                      >
-                        <Award size={16} />
-                        <span>All Certificates</span>
-                      </button>
-                    )}
-                    <button
-                      onClick={handleExportPDF}
-                      className="btn-primary flex items-center space-x-2"
+              <div className="flex flex-col h-full">
+                {/* Waiting for results data to propagate */}
+                {!resultsReady && (
+                  <div className="card mb-6">
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <LoadingSpinner size="lg" />
+                      <h3 className="text-lg font-semibold mt-4" style={{ color: 'var(--text-color)' }}>
+                        Finalising Results...
+                      </h3>
+                      <p className="text-sm mt-2" style={{ color: 'var(--text-secondary-color)' }}>
+                        Waiting for all participant scores to sync
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Results content — scaled canvas fills any screen */}
+                {resultsReady && (
+                    <StagedReveal
+                      key={debugRevealKey}
+                      enabled={resultsReady}
+                      onPhaseChange={(phase) => setRevealPhase(phase)}
+                      awardsCount={awardResults.awards.length}
                     >
-                      <Download size={16} />
-                      <span>Export PDF Report</span>
-                    </button>
-                  </div>
-                </div>
+                      {/* Slide 1: Splash — fills available space, centered */}
+                      <RevealSlot phase="splash" className="flex-1 flex">
+                        <div className="flex flex-col items-center justify-center flex-1">
+                          <Trophy size={80} style={{ color: 'var(--gold-color, #fbbf24)' }} />
+                          <h1 className="text-6xl font-bold mt-8" style={{ color: 'var(--text-color)' }}>
+                            Session Complete!
+                          </h1>
+                          <p className="text-2xl mt-4" style={{ color: 'var(--text-secondary-color)' }}>
+                            {participants.length} participant{participants.length !== 1 ? 's' : ''} competed
+                          </p>
+                        </div>
+                      </RevealSlot>
 
-                {/* Top Performers Podium */}
-                {awardResults.topPerformers.length > 0 && (
-                  <div className="card mb-6">
-                    <div className="flex items-center space-x-2 mb-6">
-                      <Trophy size={24} style={{ color: 'var(--gold-color, #fbbf24)' }} />
-                      <h2 className="text-xl font-bold">Top Performers</h2>
-                    </div>
-                    <div className="flex justify-center items-end space-x-4">
-                      {/* 2nd place */}
-                      {awardResults.topPerformers[1] && (
-                        <div className="text-center">
-                          <div
-                            className="w-20 h-24 rounded-t-lg flex flex-col items-center justify-end pb-2"
-                            style={{ backgroundColor: 'var(--silver-color, #9ca3af)' }}
-                          >
-                            <span className="text-2xl font-bold text-white">2</span>
+                      {/* Slide 2: Podium — fills available space, centered */}
+                      <RevealSlot phase="podium" className="flex-1 flex">
+                        {awardResults.topPerformers.length > 0 && (
+                          <div className="flex flex-col items-center justify-center flex-1">
+                            <ResultsPodium
+                              topPerformers={awardResults.topPerformers}
+                              scoreFormatter={scoreToPercentage}
+                              animate={true}
+                            />
                           </div>
-                          <p className="font-medium mt-2 text-sm truncate max-w-20">{awardResults.topPerformers[1].participantName}</p>
-                          <p className="text-xs text-text-secondary">{scoreToPercentage(awardResults.topPerformers[1].value)}</p>
-                        </div>
-                      )}
-                      {/* 1st place */}
-                      {awardResults.topPerformers[0] && (
-                        <div className="text-center">
-                          <div
-                            className="w-24 h-32 rounded-t-lg flex flex-col items-center justify-end pb-2"
-                            style={{ backgroundColor: 'var(--gold-color, #fbbf24)' }}
-                          >
-                            <Trophy size={28} className="text-white mb-1" />
-                            <span className="text-3xl font-bold text-white">1</span>
+                        )}
+                      </RevealSlot>
+
+                      {/* Slide 3: Awards — fills available space */}
+                      <RevealSlot phase="awards" className="flex-1 flex">
+                        {awardResults.awards.length > 0 && (
+                          <div className="flex flex-col justify-center flex-1 px-8">
+                            <AwardsCeremony
+                              awards={awardResults.awards}
+                              animate={true}
+                              getAwardIcon={getAwardIcon}
+                            />
                           </div>
-                          <p className="font-bold mt-2 truncate max-w-24">{awardResults.topPerformers[0].participantName}</p>
-                          <p className="text-sm text-primary font-semibold">{scoreToPercentage(awardResults.topPerformers[0].value)}</p>
+                        )}
+                      </RevealSlot>
+
+                      {/* Slide 4 (final): Leaderboard + Stats combined — stays on screen */}
+                      <RevealSlot phase="leaderboard" className="flex-1 flex flex-col">
+                        <div className="card flex-1 mx-8">
+                          <PresenterLeaderboard
+                            participants={participants}
+                            quiz={quiz}
+                            isBingoSession={isBingoSession}
+                          />
                         </div>
-                      )}
-                      {/* 3rd place */}
-                      {awardResults.topPerformers[2] && (
-                        <div className="text-center">
-                          <div
-                            className="w-20 h-20 rounded-t-lg flex flex-col items-center justify-end pb-2"
-                            style={{ backgroundColor: 'var(--bronze-color, #d97706)' }}
-                          >
-                            <span className="text-2xl font-bold text-white">3</span>
-                          </div>
-                          <p className="font-medium mt-2 text-sm truncate max-w-20">{awardResults.topPerformers[2].participantName}</p>
-                          <p className="text-xs text-text-secondary">{scoreToPercentage(awardResults.topPerformers[2].value)}</p>
+                      </RevealSlot>
+
+                      <RevealSlot phase="stats">
+                        <div className="mx-8">
+                          <PresenterStats
+                            stats={sessionStats}
+                            isBingoSession={isBingoSession}
+                            bingoWinners={participants.filter(p => p.gameState?.gameWon).length}
+                            scoreFormatter={scoreToPercentage}
+                            timeFormatter={(seconds) => isBingoSession ? formatTime(seconds) : `${seconds}s`}
+                          />
                         </div>
-                      )}
-                    </div>
-                  </div>
+                      </RevealSlot>
+                    </StagedReveal>
                 )}
-
-                {/* Awards Section */}
-                {awardResults.awards.length > 0 && (
-                  <div className="card mb-6">
-                    <div className="flex items-center space-x-2 mb-6">
-                      <Medal size={24} style={{ color: 'var(--celebration-color, #8b5cf6)' }} />
-                      <h2 className="text-xl font-bold">Session Awards</h2>
-                    </div>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      {awardResults.awards.map((award) => (
-                        <div
-                          key={award.id}
-                          className="p-4 rounded-lg border-2"
-                          style={{
-                            borderColor: award.color,
-                            backgroundColor: 'var(--surface-color)'
-                          }}
-                        >
-                          <div className="flex items-center space-x-3 mb-3">
-                            <div
-                              className="p-2 rounded-full"
-                              style={{ backgroundColor: award.color, color: 'white' }}
-                            >
-                              {getAwardIcon(award.icon, 20)}
-                            </div>
-                            <div>
-                              <h3 className="font-bold">{award.name}</h3>
-                              <p className="text-xs text-text-secondary">{award.description}</p>
-                            </div>
-                          </div>
-                          <div className="space-y-2">
-                            {award.recipients.map((recipient, idx) => (
-                              <div
-                                key={`${recipient.participantId}-${idx}`}
-                                className="flex justify-between items-center text-sm p-2 rounded"
-                                style={{ backgroundColor: 'var(--background-color)' }}
-                              >
-                                <span className="font-medium">{recipient.participantName}</span>
-                                <span className="text-text-secondary">{recipient.value}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Full Leaderboard */}
-                <div className="card mb-6">
-                  <div className="flex items-center space-x-2 mb-6">
-                    <Users size={24} style={{ color: 'var(--primary-color)' }} />
-                    <h2 className="text-xl font-bold">Final Leaderboard</h2>
-                  </div>
-                  <div className="space-y-2">
-                    {participants
-                      .slice()
-                      .sort((a, b) => {
-                        const scoreA = a.gameState?.score || a.finalScore || 0
-                        const scoreB = b.gameState?.score || b.finalScore || 0
-                        if (scoreB !== scoreA) return scoreB - scoreA
-                        const answersA = a.gameState?.answers || []
-                        const answersB = b.gameState?.answers || []
-                        const avgTimeA = answersA.length > 0 ? answersA.reduce((s: number, ans: any) => s + (ans.timeSpent || 0), 0) / answersA.length : 999
-                        const avgTimeB = answersB.length > 0 ? answersB.reduce((s: number, ans: any) => s + (ans.timeSpent || 0), 0) / answersB.length : 999
-                        return avgTimeA - avgTimeB
-                      })
-                      .map((participant, index) => {
-                        const rank = index + 1
-                        const answeredCount = participant.gameState?.answers?.length || 0
-                        const correctCount = participant.gameState?.answers?.filter((a: any) => a.isCorrect).length || 0
-                        const totalQ = quiz?.questions.length || 1
-                        const pct = totalQ > 0 ? Math.round((correctCount / totalQ) * 100) : 0
-                        const avgTime = answeredCount > 0
-                          ? Math.round((participant.gameState?.answers?.reduce((sum: number, a: any) => sum + (a.timeSpent || 0), 0) || 0) / answeredCount)
-                          : 0
-                        let bestStreak = 0
-                        let curStreak = 0
-                        ;(participant.gameState?.answers || []).forEach((a: any) => {
-                          if (a.isCorrect) { curStreak++; bestStreak = Math.max(bestStreak, curStreak) }
-                          else { curStreak = 0 }
-                        })
-                        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : ''
-                        const isCompleted = participant.completed || participant.gameState?.completed ||
-                          answeredCount >= totalQ
-
-                        return (
-                          <div
-                            key={participant.id}
-                            className="flex items-center justify-between p-3 rounded-lg"
-                            style={{
-                              backgroundColor: rank === 1 ? 'rgba(251, 191, 36, 0.15)'
-                                : rank === 2 ? 'rgba(156, 163, 175, 0.15)'
-                                : rank === 3 ? 'rgba(217, 119, 6, 0.15)'
-                                : 'var(--surface-color)'
-                            }}
-                          >
-                            <div className="flex items-center space-x-3">
-                              <div className="w-8 text-center font-bold text-lg">
-                                {medal || rank}
-                              </div>
-                              <span className="text-lg">{(participant as any).avatar || '😀'}</span>
-                              <div>
-                                <span className="font-medium">{participant.name}</span>
-                                {isCompleted && (
-                                  <span
-                                    className="ml-2 text-xs px-1.5 py-0.5 rounded"
-                                    style={{ backgroundColor: 'var(--success-light-color, #dcfce7)', color: 'var(--success-color, #166534)' }}
-                                  >
-                                    Done
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex items-center space-x-4 text-sm">
-                              <div className="text-center">
-                                <div className="font-bold text-lg" style={{ color: 'var(--primary-color)' }}>{pct}%</div>
-                                <div className="text-xs text-text-secondary">{correctCount}/{totalQ}</div>
-                              </div>
-                              <div className="text-center">
-                                <div className="font-medium">{avgTime}s</div>
-                                <div className="text-xs text-text-secondary">Avg</div>
-                              </div>
-                              {bestStreak >= 2 && (
-                                <div className="text-center">
-                                  <div className="font-medium">🔥 {bestStreak}</div>
-                                  <div className="text-xs text-text-secondary">Streak</div>
-                                </div>
-                              )}
-                              {currentOrganization?.settings?.enableAttendanceCertificates && (
-                                <button
-                                  onClick={() => handleSingleAttendanceCertificate(participant.name)}
-                                  className="p-1.5 rounded-lg transition-colors hover:bg-white/20"
-                                  style={{ color: 'var(--primary-color)' }}
-                                  title={`Download attendance certificate for ${participant.name}`}
-                                >
-                                  <Download size={16} />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    {participants.length === 0 && (
-                      <p className="text-center text-text-secondary py-4">No participants</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Final Statistics */}
-                <div className="card">
-                  <h3 className="font-semibold mb-4">Final Results Summary</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="text-center p-4 rounded-lg" style={{ backgroundColor: 'var(--surface-color)' }}>
-                      <div className="text-3xl font-bold text-primary">{sessionStats.totalParticipants}</div>
-                      <div className="text-sm text-text-secondary">Total Participants</div>
-                    </div>
-                    <div className="text-center p-4 rounded-lg" style={{ backgroundColor: 'var(--surface-color)' }}>
-                      <div className="text-3xl font-bold" style={{ color: 'var(--success-color)' }}>{scoreToPercentage(sessionStats.averageScore)}</div>
-                      <div className="text-sm text-text-secondary">Average Score</div>
-                    </div>
-                    {isBingoSession ? (
-                      <div className="text-center p-4 rounded-lg" style={{ backgroundColor: 'var(--surface-color)' }}>
-                        <div className="text-3xl font-bold" style={{ color: 'var(--gold-color, #fbbf24)' }}>
-                          {participants.filter(p => p.gameState?.gameWon).length}
-                        </div>
-                        <div className="text-sm text-text-secondary">Total BINGOs</div>
-                      </div>
-                    ) : (
-                      <div className="text-center p-4 rounded-lg" style={{ backgroundColor: 'var(--surface-color)' }}>
-                        <div className="text-3xl font-bold" style={{ color: 'var(--info-color, #2563eb)' }}>{sessionStats.completionRate}%</div>
-                        <div className="text-sm text-text-secondary">Completion Rate</div>
-                      </div>
-                    )}
-                    <div className="text-center p-4 rounded-lg" style={{ backgroundColor: 'var(--surface-color)' }}>
-                      <div className="text-3xl font-bold" style={{ color: 'var(--accent-color, #9333ea)' }}>
-                        {isBingoSession ? formatTime(sessionStats.averageTime) : `${sessionStats.averageTime}s`}
-                      </div>
-                      <div className="text-sm text-text-secondary">{isBingoSession ? 'Avg Time Spent' : 'Avg Response Time'}</div>
-                    </div>
-                  </div>
-                </div>
-              </>
+              </div>
             )}
 
-            {/* ACTIVE STATE: Show questions (quiz) or progress (bingo) */}
+            {/* ACTIVE STATE: Full-width progress view */}
             {session.status === 'active' && (
-              <>
-                {isBingoSession ? (
-                  /* BINGO ACTIVE STATE: Show participant progress */
-                  <>
-                    <div className="card">
-                      <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold">Bingo Session Active</h2>
-                        <div
-                          className="px-3 py-1 rounded text-sm font-medium"
-                          style={{
-                            backgroundColor: 'var(--success-light-color, #dcfce7)',
-                            color: 'var(--success-color, #166534)'
-                          }}
-                        >
-                          ACTIVE
-                        </div>
-                      </div>
-
-                      {/* Timer */}
-                      <div className="mb-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-text-secondary">Time Remaining</span>
-                          <button
-                            onClick={resetTimer}
-                            className="text-sm text-primary hover:underline"
-                          >
-                            Reset
-                          </button>
-                        </div>
-                        <div className="flex items-center space-x-4">
-                          <div
-                            className="text-4xl font-bold"
-                            style={{ color: timeRemaining <= 60 ? 'var(--error-color)' : 'var(--primary-color)' }}
-                          >
-                            {formatTime(timeRemaining)}
-                          </div>
-                          <div className="flex-1">
-                            <div
-                              className="w-full rounded-full h-3"
-                              style={{ backgroundColor: 'var(--border-color)' }}
-                            >
-                              <div
-                                className="h-3 rounded-full transition-all duration-1000"
-                                style={{
-                                  width: `${(timeRemaining / (session.settings?.timeLimit || 900)) * 100}%`,
-                                  backgroundColor: timeRemaining <= 60 ? 'var(--error-color)' : 'var(--primary-color)'
-                                }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Bingo Participant Progress */}
-                      <div className="mb-4">
-                        <h3 className="text-lg font-semibold mb-4">Participant Progress</h3>
-                        <div className="space-y-3">
-                          {participants.map((participant) => {
-                            const gs = participant.gameState
-                            const cellsMarked = gs?.cellsMarked || 0
-                            const totalCells = gs?.totalCells || 25
-                            const progress = totalCells > 0 ? (cellsMarked / totalCells) * 100 : 0
-                            const hasWon = gs?.gameWon || false
-                            const linesCompleted = gs?.linesCompleted || 0
-
-                            return (
-                              <div
-                                key={participant.id}
-                                className="p-3 rounded-lg"
-                                style={{
-                                  backgroundColor: hasWon
-                                    ? 'var(--success-light-color, #dcfce7)'
-                                    : 'var(--surface-color)'
-                                }}
-                              >
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center space-x-2">
-                                    <span className="text-lg">{(participant as any).avatar || '😀'}</span>
-                                    <span className="font-medium">{participant.name}</span>
-                                    {hasWon && (
-                                      <span
-                                        className="px-2 py-0.5 rounded-full text-xs font-bold"
-                                        style={{
-                                          backgroundColor: 'var(--gold-color, #fbbf24)',
-                                          color: '#000'
-                                        }}
-                                      >
-                                        BINGO!
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center space-x-3 text-sm text-text-secondary">
-                                    <span>{cellsMarked}/{totalCells} cells</span>
-                                    {linesCompleted > 0 && (
-                                      <span className="font-medium" style={{ color: 'var(--success-color)' }}>
-                                        {linesCompleted} line{linesCompleted !== 1 ? 's' : ''}
-                                      </span>
-                                    )}
-                                    <span className="font-semibold" style={{ color: 'var(--primary-color)' }}>
-                                      {gs?.score || 0} pts
-                                    </span>
-                                  </div>
-                                </div>
-                                <div
-                                  className="w-full rounded-full h-2"
-                                  style={{ backgroundColor: 'var(--border-color)' }}
-                                >
-                                  <div
-                                    className="h-2 rounded-full transition-all duration-500"
-                                    style={{
-                                      width: `${progress}%`,
-                                      backgroundColor: hasWon
-                                        ? 'var(--gold-color, #fbbf24)'
-                                        : 'var(--primary-color)'
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            )
-                          })}
-                          {participants.length === 0 && (
-                            <p className="text-center text-text-secondary py-4">No participants yet</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Live Statistics */}
-                    <div className="card">
-                      <h3 className="font-semibold mb-4">Live Statistics</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="text-center">
-                          <div className="text-2xl font-bold text-primary">{sessionStats.totalParticipants}</div>
-                          <div className="text-sm text-text-secondary">Participants</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-2xl font-bold" style={{ color: 'var(--gold-color, #fbbf24)' }}>
-                            {participants.filter(p => p.gameState?.gameWon).length}
-                          </div>
-                          <div className="text-sm text-text-secondary">BINGOs</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>{sessionStats.averageScore}</div>
-                          <div className="text-sm text-text-secondary">Avg Score</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-2xl font-bold" style={{ color: 'var(--info-color, #2563eb)' }}>{sessionStats.completionRate}%</div>
-                          <div className="text-sm text-text-secondary">Completion</div>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  /* QUIZ ACTIVE STATE: Show participant progress (presenter view) */
-                  <>
-                    <div className="card">
-                      <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold">Quiz Session Active</h2>
-                        <div
-                          className="px-3 py-1 rounded text-sm font-medium animate-pulse"
-                          style={{
-                            backgroundColor: 'var(--success-light-color, #dcfce7)',
-                            color: 'var(--success-color, #166534)'
-                          }}
-                        >
-                          LIVE
-                        </div>
-                      </div>
-
-                      {/* Session Timer */}
-                      <div className="mb-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-text-secondary">Session Time Remaining</span>
-                        </div>
-                        <div className="flex items-center space-x-4">
-                          <div
-                            className={`text-4xl font-bold font-mono ${timeRemaining <= 60 ? 'animate-pulse' : ''}`}
-                            style={{
-                              color: timeRemaining <= 60 ? 'var(--error-color)' :
-                                timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
-                                'var(--primary-color)'
-                            }}
-                          >
-                            {formatTime(timeRemaining)}
-                          </div>
-                          <div className="flex-1">
-                            <div
-                              className="w-full rounded-full h-3"
-                              style={{ backgroundColor: 'var(--border-color)' }}
-                            >
-                              <div
-                                className="h-3 rounded-full transition-all duration-1000"
-                                style={{
-                                  width: `${(timeRemaining / (quiz.timeLimit * quiz.questions.length)) * 100}%`,
-                                  backgroundColor: timeRemaining <= 60 ? 'var(--error-color)' :
-                                    timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
-                                    'var(--primary-color)'
-                                }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Quiz Info Summary */}
-                      <div
-                        className="grid grid-cols-3 gap-4 text-center mb-6 p-4 rounded-lg"
-                        style={{ backgroundColor: 'var(--background-color)' }}
-                      >
-                        <div>
-                          <div className="text-2xl font-bold text-primary">{quiz.questions.length}</div>
-                          <div className="text-sm text-text-secondary">Questions</div>
-                        </div>
-                        <div>
-                          <div className="text-2xl font-bold text-primary">{quiz.timeLimit}s</div>
-                          <div className="text-sm text-text-secondary">Per Question</div>
-                        </div>
-                        <div>
-                          <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>
-                            {sessionStats.completedCount}/{sessionStats.totalParticipants}
-                          </div>
-                          <div className="text-sm text-text-secondary">Completed</div>
-                        </div>
-                      </div>
-
-                      {/* Participant Progress */}
-                      <div className="mb-4">
-                        <h3 className="text-lg font-semibold mb-4">Participant Progress</h3>
-                        <div className="space-y-3">
-                          {participants
-                            .slice()
-                            .sort((a, b) => (b.gameState?.score || 0) - (a.gameState?.score || 0))
-                            .map((participant) => {
-                              const answeredCount = participant.gameState?.answers?.length || 0
-                              const totalQ = quiz.questions.length
-                              const progress = totalQ > 0 ? (answeredCount / totalQ) * 100 : 0
-                              const isCompleted = participant.completed || participant.gameState?.completed ||
-                                answeredCount >= totalQ
-                              const score = participant.gameState?.score || 0
-
-                              return (
-                                <div
-                                  key={participant.id}
-                                  className="p-3 rounded-lg"
-                                  style={{
-                                    backgroundColor: isCompleted
-                                      ? 'var(--success-light-color, #dcfce7)'
-                                      : 'var(--surface-color)'
-                                  }}
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                    <div className="flex items-center space-x-2">
-                                      <span className="text-lg">{(participant as any).avatar || '😀'}</span>
-                                      <span className="font-medium">{participant.name}</span>
-                                      {isCompleted && (
-                                        <span
-                                          className="px-2 py-0.5 rounded-full text-xs font-bold"
-                                          style={{
-                                            backgroundColor: 'var(--success-color)',
-                                            color: 'white'
-                                          }}
-                                        >
-                                          DONE
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="flex items-center space-x-3 text-sm text-text-secondary">
-                                      <span>{answeredCount}/{totalQ} answered</span>
-                                      <span className="font-semibold" style={{ color: 'var(--primary-color)' }}>
-                                        {score} pts
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div
-                                    className="w-full rounded-full h-2"
-                                    style={{ backgroundColor: 'var(--border-color)' }}
-                                  >
-                                    <div
-                                      className="h-2 rounded-full transition-all duration-500"
-                                      style={{
-                                        width: `${progress}%`,
-                                        backgroundColor: isCompleted
-                                          ? 'var(--success-color)'
-                                          : 'var(--primary-color)'
-                                      }}
-                                    />
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          {participants.length === 0 && (
-                            <p className="text-center text-text-secondary py-4">No participants yet</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Live Statistics */}
-                    <div className="card">
-                      <h3 className="font-semibold mb-4">Live Statistics</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="text-center">
-                          <div className="text-2xl font-bold text-primary">{sessionStats.totalParticipants}</div>
-                          <div className="text-sm text-text-secondary">Participants</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-2xl font-bold" style={{ color: 'var(--success-color)' }}>{sessionStats.averageScore}</div>
-                          <div className="text-sm text-text-secondary">Avg Score</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-2xl font-bold" style={{ color: 'var(--info-color, #2563eb)' }}>{sessionStats.completionRate}%</div>
-                          <div className="text-sm text-text-secondary">Completion</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-2xl font-bold" style={{ color: 'var(--accent-color, #9333ea)' }}>{sessionStats.averageTime}s</div>
-                          <div className="text-sm text-text-secondary">Avg Time</div>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* QR Code Card - Always visible, prominent during waiting */}
-            <div className="card">
-              <div className="flex items-center space-x-2 mb-4">
-                <Target size={20} className="text-primary" />
-                <h3 className="font-semibold">Join Session</h3>
-              </div>
-              <div className="text-center">
-                <div className="p-4 rounded-lg bg-white inline-block mb-4">
-                  <QRCode
-                    value={sessionUrl}
-                    size={qrSize}
-                    level="M"
-                  />
-                </div>
-                <div
-                  className="rounded-lg p-3 mb-3"
-                  style={{ backgroundColor: 'var(--surface-color)' }}
-                >
-                  <p className="text-xs text-text-secondary uppercase tracking-wide mb-1">Session Code</p>
-                  <p className="text-2xl font-mono font-bold text-primary">{session.code}</p>
-                </div>
-                <p className="text-xs text-text-secondary break-all">{sessionUrl}</p>
-              </div>
-            </div>
-
-            {/* Participants List - Compact view in sidebar */}
-            {session.status !== 'waiting' && (
-              <div className="card">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold flex items-center space-x-2">
-                    <Users size={20} />
-                    <span>Participants ({participants.length})</span>
-                  </h3>
-                  {sessionStats.completedCount > 0 && (
-                    <span
-                      className="text-xs px-2 py-1 rounded-full"
-                      style={{ backgroundColor: 'var(--success-light-color)', color: 'var(--success-color)' }}
-                    >
-                      {sessionStats.completedCount} done
-                    </span>
-                  )}
-                </div>
-
-                {participants.length === 0 ? (
-                  <div className="text-center py-4 text-text-secondary">
-                    <p>No participants yet</p>
+              <div className="h-full flex flex-col p-10">
+                {/* Timer hero */}
+                <div className="text-center mb-4">
+                  <div
+                    className={`text-8xl font-mono font-bold tabular-nums ${timeRemaining <= 60 ? 'animate-pulse' : ''}`}
+                    style={{
+                      color: timeRemaining <= 60 ? 'var(--error-color)' :
+                        timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
+                        'var(--primary-color)'
+                    }}
+                  >
+                    {formatTime(timeRemaining)}
                   </div>
-                ) : (
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {participants.map((participant) => {
-                      const isCompleted = participant.completed || participant.gameState?.completed ||
-                        (isBingoSession && (participant.gameState?.gameWon || participant.gameState?.fullCardAchieved))
+                  <div className="w-full mt-3 rounded-full h-3" style={{ backgroundColor: 'var(--border-color)' }}>
+                    <div
+                      className="h-3 rounded-full transition-all duration-1000"
+                      style={{
+                        width: `${(timeRemaining / (isBingoSession
+                          ? (session.settings?.timeLimit || 900)
+                          : (quiz.timeLimit * quiz.questions.length)
+                        )) * 100}%`,
+                        backgroundColor: timeRemaining <= 60 ? 'var(--error-color)' :
+                          timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
+                          'var(--primary-color)'
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Participant progress */}
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <div className="space-y-3">
+                    {(isBingoSession
+                      ? participants
+                      : participants.slice().sort((a, b) => (b.gameState?.score || 0) - (a.gameState?.score || 0))
+                    ).map((participant, index) => {
+                      const gs = participant.gameState
+                      // Bingo metrics
+                      const cellsMarked = gs?.cellsMarked || 0
+                      const totalCells = gs?.totalCells || 25
+                      const hasWon = gs?.gameWon || false
+                      const linesCompleted = gs?.linesCompleted || 0
+                      // Quiz metrics
+                      const answeredCount = gs?.answers?.length || 0
+                      const totalQ = quiz?.questions.length || 1
+                      // Unified
+                      const progress = isBingoSession
+                        ? (totalCells > 0 ? (cellsMarked / totalCells) * 100 : 0)
+                        : (totalQ > 0 ? (answeredCount / totalQ) * 100 : 0)
+                      const isCompleted = isBingoSession
+                        ? hasWon
+                        : (participant.completed || gs?.completed || answeredCount >= totalQ)
+                      const score = gs?.score || 0
+
                       return (
                         <div
                           key={participant.id}
-                          className="flex items-center justify-between p-2 rounded-lg group"
+                          className="flex items-center gap-4 px-5 py-3 rounded-xl"
                           style={{
                             backgroundColor: isCompleted
-                              ? 'var(--success-light-color, #dcfce7)'
+                              ? isBingoSession ? 'rgba(251, 191, 36, 0.15)' : 'var(--success-light-color, #dcfce7)'
                               : 'var(--surface-color)'
                           }}
                         >
-                          <div className="flex items-center space-x-2 min-w-0">
-                            <span className="text-lg flex-shrink-0">{(participant as any).avatar || '😀'}</span>
-                            <span className="font-medium text-sm truncate">{participant.name}</span>
-                            {isBingoSession && participant.gameState?.gameWon && (
-                              <span
-                                className="px-1 py-0.5 rounded text-[10px] font-bold flex-shrink-0"
-                                style={{ backgroundColor: 'var(--gold-color, #fbbf24)', color: '#000' }}
-                              >
-                                BINGO
-                              </span>
-                            )}
-                            {!isBingoSession && isCompleted && (
-                              <Trophy size={14} style={{ color: 'var(--success-color)', flexShrink: 0 }} />
-                            )}
+                          {/* Rank (quiz only) */}
+                          {!isBingoSession && (
+                            <div className="w-10 text-center text-2xl font-bold tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
+                              {index + 1}
+                            </div>
+                          )}
+                          {/* Avatar */}
+                          <span className="text-3xl flex-shrink-0">{(participant as any).avatar || '\u{1F600}'}</span>
+                          {/* Name */}
+                          <span className="text-2xl font-medium truncate" style={{ color: 'var(--text-color)', minWidth: 180 }}>
+                            {participant.name}
+                          </span>
+                          {/* Status badge */}
+                          {isCompleted && !isBingoSession && (
+                            <span className="px-3 py-1 rounded-full text-sm font-bold flex-shrink-0" style={{ backgroundColor: 'var(--success-color)', color: 'white' }}>
+                              DONE
+                            </span>
+                          )}
+                          {hasWon && isBingoSession && (
+                            <span className="px-3 py-1 rounded-full text-sm font-bold flex-shrink-0" style={{ backgroundColor: 'var(--gold-color, #fbbf24)', color: '#000' }}>
+                              BINGO!
+                            </span>
+                          )}
+                          {/* Progress bar */}
+                          <div className="flex-1 mx-4">
+                            <div className="w-full rounded-full h-4" style={{ backgroundColor: 'var(--border-color)' }}>
+                              <div
+                                className="h-4 rounded-full transition-all duration-500"
+                                style={{
+                                  width: `${progress}%`,
+                                  backgroundColor: isCompleted
+                                    ? (isBingoSession ? 'var(--gold-color, #fbbf24)' : 'var(--success-color)')
+                                    : 'var(--primary-color)'
+                                }}
+                              />
+                            </div>
                           </div>
-                          <div className="flex items-center space-x-2">
-                            {isBingoSession ? (
-                              <span className="text-xs text-text-secondary">
-                                {participant.gameState?.cellsMarked || 0}/{participant.gameState?.totalCells || 25}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-text-secondary">
-                                {participant.gameState?.score || participant.finalScore || 0} pts
+                          {/* Stats */}
+                          <div className="flex items-center gap-4 flex-shrink-0">
+                            <span className="text-xl tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
+                              {isBingoSession ? `${cellsMarked}/${totalCells}` : `${answeredCount}/${totalQ}`}
+                            </span>
+                            {isBingoSession && linesCompleted > 0 && (
+                              <span className="text-xl font-medium" style={{ color: 'var(--success-color)' }}>
+                                {linesCompleted} line{linesCompleted !== 1 ? 's' : ''}
                               </span>
                             )}
-                            {/* Kick button */}
-                            <button
-                              onClick={() => kickParticipant(participant.id, participant.name)}
-                              className="opacity-0 group-hover:opacity-100 p-1 rounded transition-all hover:bg-red-100"
-                              style={{ color: 'var(--error-color, #ef4444)' }}
-                              title={`Remove ${participant.name}`}
-                            >
-                              <X size={14} />
-                            </button>
+                            <span className="text-2xl font-bold tabular-nums" style={{ color: 'var(--primary-color)', minWidth: 100, textAlign: 'right' }}>
+                              {score} pts
+                            </span>
                           </div>
                         </div>
                       )
                     })}
+                    {participants.length === 0 && (
+                      <div className="flex items-center justify-center py-16">
+                        <p className="text-2xl" style={{ color: 'var(--text-secondary-color)' }}>No participants yet</p>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )}
+                </div>
 
-            {/* Timer Card - During waiting */}
-            {session.status === 'waiting' && (
-              <div className="card">
-                <div className="flex items-center space-x-2 mb-4">
-                  <Clock size={20} className="text-primary" />
-                  <h3 className="font-semibold">{isBingoSession ? 'Session Duration' : 'Quiz Duration'}</h3>
-                </div>
-                <div className="text-center">
-                  <div className="text-4xl font-mono font-bold text-primary mb-2">
-                    {isBingoSession
-                      ? formatTime(session.settings?.timeLimit || 900)
-                      : formatTime(quiz.timeLimit * quiz.questions.length)
-                    }
+                {/* Bottom stats strip */}
+                <div
+                  className="flex items-center justify-around mt-4 py-4 rounded-xl"
+                  style={{ backgroundColor: 'var(--surface-color)' }}
+                >
+                  <div className="text-center">
+                    <div className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>{sessionStats.totalParticipants}</div>
+                    <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Playing</div>
                   </div>
-                  <p className="text-sm text-text-secondary">
-                    {isBingoSession ? 'Time limit' : 'Total estimated time'}
-                  </p>
+                  {isBingoSession ? (
+                    <div className="text-center">
+                      <div className="text-3xl font-bold" style={{ color: 'var(--gold-color, #fbbf24)' }}>
+                        {participants.filter(p => p.gameState?.gameWon).length}
+                      </div>
+                      <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>BINGOs</div>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <div className="text-3xl font-bold" style={{ color: 'var(--success-color)' }}>
+                        {sessionStats.completedCount}/{sessionStats.totalParticipants}
+                      </div>
+                      <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Completed</div>
+                    </div>
+                  )}
+                  <div className="text-center">
+                    <div className="text-3xl font-bold" style={{ color: 'var(--info-color, #2563eb)' }}>{sessionStats.averageScore}</div>
+                    <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Avg Score</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold" style={{ color: 'var(--accent-color, #9333ea)' }}>{sessionStats.completionRate}%</div>
+                    <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Complete</div>
+                  </div>
                 </div>
               </div>
             )}
-          </div>
-        </div>
+        </PresenterCanvas>
       </div>
 
       {/* QR Code Modal */}
@@ -1572,6 +1225,73 @@ export const SessionControl: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Debug Panel - only in debug mode */}
+      {isDebugMode && (
+        <div
+          className="fixed bottom-4 left-4 z-[200] p-4 rounded-xl shadow-lg space-y-2 text-sm"
+          style={{
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            color: '#e2e8f0',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            maxWidth: '220px',
+          }}
+        >
+          <div className="font-bold text-xs uppercase tracking-wider text-amber-400 mb-2">
+            Debug Panel
+          </div>
+          <div className="text-xs" style={{ color: '#94a3b8' }}>
+            Phase: <span className="font-mono text-white">{revealPhase}</span>
+          </div>
+          <div className="text-xs" style={{ color: '#94a3b8' }}>
+            Participants: <span className="font-mono text-white">{participants.length}</span>
+          </div>
+          <div className="text-xs" style={{ color: '#94a3b8' }}>
+            Awards: <span className="font-mono text-white">{awardResults.awards.length}</span>
+          </div>
+          <button
+            onClick={() => {
+              setRevealPhase('splash')
+              setDebugRevealKey(k => k + 1)
+            }}
+            className="w-full px-3 py-1.5 rounded text-xs font-medium transition-colors"
+            style={{ backgroundColor: '#3b82f6', color: 'white' }}
+          >
+            Replay Reveal
+          </button>
+          <button
+            onClick={() => {
+              const counts = [3, 5, 8, 10, 15]
+              const current = participants.length
+              const nextIdx = (counts.indexOf(current) + 1) % counts.length
+              const { session: s, quiz: q, participants: p } = generateDebugParticipants(counts[nextIdx])
+              setSession(s)
+              setQuiz(q)
+              setParticipants(p)
+
+              const totalScores = p.reduce((sum, pp) => sum + (pp.gameState?.score || 0), 0)
+              const completed = p.filter(pp => pp.completed)
+              const allAnswers = p.flatMap(pp => pp.gameState?.answers || [])
+              const avgTime = allAnswers.length > 0
+                ? allAnswers.reduce((sum, a) => sum + a.timeSpent, 0) / allAnswers.length : 0
+              setSessionStats({
+                totalParticipants: p.length,
+                averageScore: Math.round(totalScores / p.length),
+                completionRate: Math.round((completed.length / p.length) * 100),
+                averageTime: Math.round(avgTime),
+                completedCount: completed.length,
+              })
+              setRevealPhase('splash')
+              setDebugRevealKey(k => k + 1)
+            }}
+            className="w-full px-3 py-1.5 rounded text-xs font-medium transition-colors"
+            style={{ backgroundColor: '#6366f1', color: 'white' }}
+          >
+            Cycle Count ({participants.length} → next)
+          </button>
+        </div>
+      )}
     </div>
+    </>
   )
 }

@@ -115,28 +115,28 @@
 /* Custom component styles */
 @layer components {
   .btn-primary {
-    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    @apply px-5 py-3 font-medium text-base transition-opacity hover:opacity-90;
     background-color: var(--primary-color);
     color: var(--text-on-primary-color);
     border-radius: var(--border-radius);
   }
 
   .btn-secondary {
-    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    @apply px-5 py-3 font-medium text-base transition-opacity hover:opacity-90;
     background-color: var(--secondary-color);
     color: var(--text-on-secondary-color);
     border-radius: var(--border-radius);
   }
 
   .btn-success {
-    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    @apply px-5 py-3 font-medium text-base transition-opacity hover:opacity-90;
     background-color: var(--success-color);
     color: #ffffff;
     border-radius: var(--border-radius);
   }
 
   .btn-error {
-    @apply px-4 py-2 font-medium transition-opacity hover:opacity-90;
+    @apply px-5 py-3 font-medium text-base transition-opacity hover:opacity-90;
     background-color: var(--error-color);
     color: #ffffff;
     border-radius: var(--border-radius);
@@ -150,7 +150,7 @@
   }
 
   .input {
-    @apply w-full px-3 py-2 outline-none;
+    @apply w-full px-4 py-3 text-base outline-none;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius);
     background-color: var(--background-color);
@@ -352,6 +352,12 @@ body {
 .enhance-glow { animation: glow-effect 1s ease-in-out infinite; }
 .animate-fade-in { animation: fadeIn 0.3s ease-out; }
 .animate-count-pop { animation: countPop 0.4s ease-out; }
+
+/* Quick scale-in for feedback overlays */
+@keyframes scale-in {
+  from { transform: scale(0.8); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
 .enhance-highlight { animation: answer-highlight 0.5s ease-in-out infinite; }
 
 /* Gold sparkle animation - for ESI theme and gold accents */

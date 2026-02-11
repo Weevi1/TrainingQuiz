@@ -128,7 +128,14 @@ export const Dashboard: React.FC = () => {
 
       setShowQuizModal(false)
       setSelectedQuiz(null)
-      navigate(`/session/${sessionId}`)
+      window.open(
+        `${window.location.origin}/session/${sessionId}`,
+        '_blank',
+        'width=1280,height=800,menubar=no,toolbar=no,location=yes,status=no,scrollbars=yes,resizable=yes'
+      )
+
+      // Navigate the trainer's window to SessionControl too (muted — projector popup handles sound)
+      navigate(`/session/${sessionId}`, { state: { muteSound: true } })
     } catch (error) {
       console.error('Error creating session:', error)
       alert('Error creating session. Please try again.')

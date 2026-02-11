@@ -186,42 +186,54 @@ export const BingoGame: React.FC<BingoGameProps> = ({
     generateBingoCard()
   }, [items, cardSize])
 
-  // Game start sound effect
+  // Game start - no sounds on phone (presenter handles game start sounds)
   useEffect(() => {
-    playSound('gameStart')
-    playSequence([{ sound: 'ding', delay: 0 }, { sound: 'tick', delay: 100 }])
     startTimeRef.current = Date.now()
   }, [])
 
-  // Timer effect - use trainer's timer when available, local fallback
+  // Timer effect - anchor-based calculation (syncs with presenter, no drift)
+  // Timer sounds play on presenter only (phones are quiet)
+  const timerAnchorRef = useRef<number>(0)
+  const timerPausedRef = useRef(false)
+  const pausedRemainingRef = useRef(0)
+
   useEffect(() => {
     if (timeLimit && timeRemaining > 0 && !gameComplete) {
       const timer = setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev === 31) {
-            playSound('timeWarning')
-          }
-          if (prev === 11) {
-            playAmbientTension(10000)
-            playSound('tension')
-          }
-          if (prev <= 5 && prev > 1) {
-            playSound('timeWarning')
-          }
-          if (prev <= 1) {
-            playSound('buzz')
+        // If presenter paused, hold current time
+        if (timerPausedRef.current) {
+          setTimeRemaining(pausedRemainingRef.current)
+          return
+        }
+
+        // If we have an anchor, calculate from it (prevents drift)
+        if (timerAnchorRef.current > 0) {
+          const elapsed = Math.floor((Date.now() - timerAnchorRef.current) / 1000)
+          const remaining = Math.max(0, (timeLimit || 0) - elapsed)
+
+          if (remaining <= 0) {
             endGame()
-            return 0
+            setTimeRemaining(0)
+            return
           }
-          return prev - 1
-        })
+          setTimeRemaining(remaining)
+        } else {
+          // Fallback: decrement (before anchor arrives from Firestore)
+          setTimeRemaining(prev => {
+            if (prev <= 1) {
+              endGame()
+              return 0
+            }
+            return prev - 1
+          })
+        }
       }, 1000)
 
       return () => clearInterval(timer)
     }
   }, [timeRemaining, gameComplete, timeLimit])
 
-  // Timer sync with trainer (authoritative source)
+  // Session sync: timer anchor, pause/resume, and session end detection
   useEffect(() => {
     if (!sessionId || gameCompleteRef.current) return
 
@@ -230,12 +242,29 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       (updatedSession) => {
         if (!updatedSession || gameCompleteRef.current) return
 
-        // Sync timer from trainer's broadcast
-        if (updatedSession.currentTimeRemaining !== undefined) {
-          setTimeRemaining(updatedSession.currentTimeRemaining)
+        // Sync timer anchor from presenter (one-time or on resume)
+        if (updatedSession.timerStartedAt && updatedSession.sessionTimeLimit) {
+          timerAnchorRef.current = updatedSession.timerStartedAt
         }
 
-        // Check if session ended
+        // Sync timer pause/resume from presenter
+        if (updatedSession.timerPaused && !timerPausedRef.current) {
+          timerPausedRef.current = true
+          if (timerAnchorRef.current > 0) {
+            const elapsed = Math.floor((Date.now() - timerAnchorRef.current) / 1000)
+            pausedRemainingRef.current = Math.max(0, (timeLimit || 0) - elapsed)
+          } else {
+            pausedRemainingRef.current = updatedSession.pausedTimeRemaining || timeRemaining
+          }
+        } else if (!updatedSession.timerPaused && timerPausedRef.current) {
+          timerPausedRef.current = false
+          // Anchor updated by presenter on resume
+          if (updatedSession.timerStartedAt) {
+            timerAnchorRef.current = updatedSession.timerStartedAt
+          }
+        }
+
+        // Check if session ended by trainer
         if (updatedSession.status === 'completed' && !gameCompleteRef.current) {
           endGame()
         }
@@ -382,7 +411,6 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       // Unmarking cell
       newMarkedCells.delete(cellKey)
       setStreak(0)
-      playSound('click')
 
       if (cellElement) {
         applyEffect(cellElement, 'wrong-shake')
@@ -408,11 +436,8 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       })
       setLastMarkedCell({ row, col })
 
-      // Play sound and visual effects
+      // Play marking sound (phone only gets correct feedback)
       playSound('correct')
-      if (newStreak >= 5) {
-        playSound('streak')
-      }
 
       if (cellElement) {
         applyEffect(cellElement, 'correct-pulse')
@@ -546,8 +571,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
     gameCompleteRef.current = true
     setGameComplete(true)
 
-    // Play game end sound
-    playSound('gameEnd')
+    // Game end sound plays on presenter only
 
     const timeSpent = Math.round((Date.now() - startTimeRef.current) / 1000)
 
@@ -806,7 +830,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
                 <div className="text-sm font-bold" style={{ color: 'var(--text-secondary-color)' }}>
                   {markedCells.size}/{totalCells}
                 </div>
-                <div className="text-xs">Marked</div>
+                <div className="text-sm">Marked</div>
               </div>
             </div>
             <div className="text-right">
@@ -925,9 +949,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
         showLeaderboard={true}
         showParticipantCount={true}
         showAnswerProgress={false}
-        onReaction={(reaction) => {
-          playSound('click')
-        }}
+        onReaction={() => {}}
       />
 
       {/* Floating Sound Control */}
