@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Edit, Trash2, Plus, ArrowLeft, Calendar, Clock, Hash } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { db } from '../lib/firebase'
+import { collection, query, where, getDocs, deleteDoc, doc, orderBy } from 'firebase/firestore'
 import { useAuth } from '../contexts/AuthContext'
 
 function QuizManagement() {
@@ -17,30 +18,23 @@ function QuizManagement() {
 
   const loadQuizzes = async () => {
     try {
-      const trainerId = user?.id
-      
-      // Get all quizzes with question count
-      const { data: quizzesData, error } = await supabase
-        .from('quizzes')
-        .select(`
-          *,
-          questions (id)
-        `)
-        .eq('trainer_id', trainerId)
-        .order('created_at', { ascending: false })
+      console.log('📚 Loading quizzes for trainer:', user?.uid)
 
-      if (error) {
-        console.error('Error loading quizzes:', error)
-        throw error
-      }
+      // Get all quizzes from Firebase (no trainer filtering since we migrated all data)
+      const quizzesQuery = query(
+        collection(db, 'quizzes'),
+        orderBy('createdAt', 'desc')
+      )
+      const quizzesSnapshot = await getDocs(quizzesQuery)
 
-      // Transform data to include question count
-      const transformedQuizzes = quizzesData.map(quiz => ({
-        ...quiz,
-        questionCount: quiz.questions?.length || 0
+      const quizzesData = quizzesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        questionCount: doc.data().questions?.length || 0
       }))
 
-      setQuizzes(transformedQuizzes)
+      console.log('✅ Loaded', quizzesData.length, 'quizzes')
+      setQuizzes(quizzesData)
     } catch (error) {
       console.error('Error loading quizzes:', error)
       alert('Error loading quizzes. Please try again.')
@@ -56,16 +50,8 @@ function QuizManagement() {
 
     setDeleting(quizId)
     try {
-      // Delete quiz (questions will be deleted automatically due to CASCADE)
-      const { error } = await supabase
-        .from('quizzes')
-        .delete()
-        .eq('id', quizId)
-
-      if (error) {
-        console.error('Error deleting quiz:', error)
-        throw error
-      }
+      // Delete quiz from Firebase
+      await deleteDoc(doc(db, 'quizzes', quizId))
 
       // Remove from local state
       setQuizzes(prev => prev.filter(q => q.id !== quizId))
@@ -78,8 +64,10 @@ function QuizManagement() {
     }
   }
 
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+  const formatDate = (timestamp) => {
+    if (!timestamp) return 'Unknown'
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp)
+    return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
@@ -137,7 +125,7 @@ function QuizManagement() {
 
       <main className="container mx-auto px-4 py-8">
         {quizzes.length === 0 ? (
-          <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20 p-12 text-center">
+          <div className="rounded-lg shadow border border-gb-gold/20 p-12 text-center" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
             <Hash className="w-16 h-16 text-gb-gold/50 mx-auto mb-4" />
             <h2 className="text-xl font-semibold text-gb-navy mb-2">No quizzes yet</h2>
             <p className="text-gb-navy/70 mb-6">Create your first quiz to get started</p>
@@ -152,7 +140,7 @@ function QuizManagement() {
         ) : (
           <div className="grid gap-6">
             {quizzes.map((quiz) => (
-              <div key={quiz.id} className="bg-white/95 rounded-lg shadow border border-gb-gold/20 hover:shadow-lg transition-shadow">
+              <div key={quiz.id} className="rounded-lg shadow border border-gb-gold/20 hover:shadow-lg transition-shadow" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
                 <div className="p-6">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
@@ -166,16 +154,16 @@ function QuizManagement() {
                         </div>
                         <div className="flex items-center gap-1">
                           <Clock className="w-4 h-4" />
-                          <span>{formatTime(quiz.time_limit)}</span>
+                          <span>{formatTime(quiz.timeLimit)}</span>
                         </div>
                         <div className="flex items-center gap-1">
                           <Calendar className="w-4 h-4" />
-                          <span>Created {formatDate(quiz.created_at)}</span>
+                          <span>Created {formatDate(quiz.createdAt)}</span>
                         </div>
-                        {quiz.updated_at && quiz.updated_at !== quiz.created_at && (
+                        {quiz.updatedAt && quiz.updatedAt !== quiz.createdAt && (
                           <div className="flex items-center gap-1">
                             <Edit className="w-4 h-4" />
-                            <span>Updated {formatDate(quiz.updated_at)}</span>
+                            <span>Updated {formatDate(quiz.updatedAt)}</span>
                           </div>
                         )}
                       </div>
@@ -192,7 +180,13 @@ function QuizManagement() {
                       <button
                         onClick={() => deleteQuiz(quiz.id, quiz.title)}
                         disabled={deleting === quiz.id}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                        className="p-2 rounded-lg transition-colors disabled:opacity-50"
+                        style={{
+                          color: 'var(--error-color, #dc2626)',
+                          '--hover-bg': 'var(--error-bg-color, #fef2f2)'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--error-bg-color, #fef2f2)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         title="Delete Quiz"
                       >
                         <Trash2 className="w-4 h-4" />

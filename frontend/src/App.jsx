@@ -11,6 +11,10 @@ import QuizTaking from './pages/QuizTaking'
 import Results from './pages/Results'
 import SessionResults from './pages/SessionResults'
 import AdminSessionDetails from './pages/AdminSessionDetails'
+import ScratchCardSetup from './pages/ScratchCardSetup'
+import ScratchCardSession from './pages/ScratchCardSession'
+import ScratchCard from './pages/ScratchCard'
+import ScratchCardResults from './pages/ScratchCardResults'
 
 function App() {
   return (
@@ -57,9 +61,27 @@ function App() {
                 <AdminSessionDetails />
               </ProtectedRoute>
             } />
-            
+
+            {/* Scratch Card Routes */}
+            <Route path="/admin/scratch-card/setup" element={
+              <ProtectedRoute>
+                <ScratchCardSetup />
+              </ProtectedRoute>
+            } />
+            <Route path="/scratch-session/:sessionId" element={
+              <ProtectedRoute>
+                <ScratchCardSession />
+              </ProtectedRoute>
+            } />
+            <Route path="/admin/scratch-results/:sessionId" element={
+              <ProtectedRoute>
+                <ScratchCardResults />
+              </ProtectedRoute>
+            } />
+
             {/* Public Routes */}
             <Route path="/quiz/:sessionCode" element={<QuizTaking />} />
+            <Route path="/scratch/:sessionCode" element={<ScratchCard />} />
             <Route path="/results/:sessionId" element={<Results />} />
           </Routes>
         </div>

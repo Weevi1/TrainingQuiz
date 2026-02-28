@@ -1,5 +1,13 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile
+} from 'firebase/auth'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { auth, db } from '../lib/firebase'
 
 const AuthContext = createContext({})
 
@@ -11,102 +19,87 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        loadTrainerProfile(session.user.id)
-      }
-      setLoading(false)
-    })
+    // Listen for Firebase auth state changes
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      console.log('🔥 Firebase Auth state changed:', firebaseUser?.email)
+      setUser(firebaseUser)
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        loadTrainerProfile(session.user.id)
+      if (firebaseUser) {
+        await loadTrainerProfile(firebaseUser.uid)
       } else {
         setTrainer(null)
       }
+
+      setLoading(false)
     })
 
-    return () => subscription.unsubscribe()
+    return unsubscribe
   }, [])
 
   const loadTrainerProfile = async (userId) => {
     try {
-      const { data, error } = await supabase
-        .from('trainers')
-        .select('*')
-        .eq('id', userId)
-        .single()
+      const trainerRef = doc(db, 'trainers', userId)
+      const trainerSnap = await getDoc(trainerRef)
 
-      if (!error && data) {
-        setTrainer(data)
+      if (trainerSnap.exists()) {
+        const trainerData = { id: trainerSnap.id, ...trainerSnap.data() }
+        console.log('✅ Trainer profile loaded:', trainerData)
+        setTrainer(trainerData)
+      } else {
+        console.log('❌ No trainer profile found for user:', userId)
       }
     } catch (error) {
-      console.error('Error loading trainer profile:', error)
+      console.error('💥 Error loading trainer profile:', error)
     }
   }
 
   const signUp = async (email, password, name) => {
     try {
-      // Sign up the user
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-      })
+      // Create Firebase Auth user
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+      const firebaseUser = userCredential.user
 
-      if (authError) throw authError
+      // Update the user's display name
+      await updateProfile(firebaseUser, { displayName: name })
 
-      // Create trainer profile - use the auth user's ID
-      if (authData.user) {
-        const { data: trainerData, error: trainerError } = await supabase
-          .from('trainers')
-          .insert({
-            id: authData.user.id,
-            email: authData.user.email,
-            name
-          })
-          .select()
-          .single()
-
-        if (trainerError) {
-          console.error('Error creating trainer profile:', trainerError)
-          // If trainer creation fails, we still have the auth user
-          setTrainer({ id: authData.user.id, email: authData.user.email, name })
-        } else {
-          setTrainer(trainerData)
-        }
+      // Create trainer profile in Firestore
+      const trainerData = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email,
+        name,
+        createdAt: new Date()
       }
 
-      return { data: authData, error: null }
+      await setDoc(doc(db, 'trainers', firebaseUser.uid), trainerData)
+      console.log('✅ Trainer profile created:', trainerData)
+
+      setTrainer(trainerData)
+      return { data: { user: firebaseUser }, error: null }
     } catch (error) {
+      console.error('💥 Error signing up:', error)
       return { data: null, error }
     }
   }
 
   const signIn = async (email, password) => {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
-
-      if (error) throw error
-      return { data, error: null }
+      const userCredential = await signInWithEmailAndPassword(auth, email, password)
+      console.log('✅ User signed in:', userCredential.user.email)
+      return { data: { user: userCredential.user }, error: null }
     } catch (error) {
+      console.error('💥 Error signing in:', error)
       return { data: null, error }
     }
   }
 
-  const signOut = async () => {
+  const signOutUser = async () => {
     try {
-      const { error } = await supabase.auth.signOut()
-      if (error) throw error
+      await signOut(auth)
+      console.log('✅ User signed out')
       setTrainer(null)
       return { error: null }
     } catch (error) {
+      console.error('💥 Error signing out:', error)
       return { error }
     }
   }
@@ -117,7 +110,7 @@ export const AuthProvider = ({ children }) => {
     loading,
     signUp,
     signIn,
-    signOut,
+    signOut: signOutUser,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

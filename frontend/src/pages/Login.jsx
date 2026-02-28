@@ -88,7 +88,7 @@ function Login() {
         </div>
 
         {/* Login Form */}
-        <div className="bg-white/95 rounded-xl shadow-2xl border border-gb-gold/20 p-8">
+        <div className="rounded-xl shadow-2xl border border-gb-gold/20 p-8" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Name Field - Only for signup */}
             {isSignUp && (
@@ -155,7 +155,15 @@ function Login() {
 
             {/* Error Message */}
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
+              <div
+                className="rounded-lg p-3 text-sm"
+                style={{
+                  backgroundColor: 'var(--error-bg-color, #fef2f2)',
+                  borderColor: 'var(--error-border-color, #fecaca)',
+                  border: '1px solid var(--error-border-color, #fecaca)',
+                  color: 'var(--error-color, #b91c1c)'
+                }}
+              >
                 {error}
               </div>
             )}

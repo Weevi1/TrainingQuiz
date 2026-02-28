@@ -21,7 +21,7 @@ function Home() {
           </p>
           
           <div className="max-w-md mx-auto">
-            <div className="bg-white/95 rounded-lg p-8 shadow-lg hover:shadow-xl transition-shadow border border-gb-gold/20">
+            <div className="rounded-lg p-8 shadow-lg hover:shadow-xl transition-shadow border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
               <Users className="w-12 h-12 text-gb-gold mx-auto mb-4" />
               <h2 className="text-2xl font-semibold mb-4 text-gb-navy font-serif">For Trainers</h2>
               <p className="text-gb-navy/70 mb-6">
@@ -37,7 +37,7 @@ function Home() {
           </div>
           
           <div className="mt-16">
-            <div className="bg-white/95 rounded-lg p-8 shadow-lg max-w-2xl mx-auto border border-gb-gold/20">
+            <div className="rounded-lg p-8 shadow-lg max-w-2xl mx-auto border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
               <BarChart3 className="w-12 h-12 text-gb-gold mx-auto mb-4" />
               <h2 className="text-2xl font-semibold mb-4 text-gb-navy font-serif">Fun Features</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">

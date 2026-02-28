@@ -1,7 +1,13 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Play, BarChart, Settings, Edit, Clock, LogOut } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { Plus, Play, BarChart, Settings, Edit, Clock, LogOut, Gift } from 'lucide-react'
+import {
+  getTrainerSessions,
+  createSession,
+  generateSessionCode
+} from '../lib/firestore'
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore'
+import { db } from '../lib/firebase'
 import { useAuth } from '../contexts/AuthContext'
 
 function AdminDashboard() {
@@ -19,41 +25,51 @@ function AdminDashboard() {
 
   const loadDashboardData = async () => {
     try {
-      if (!user) return
-      
-      // Get recent quizzes
-      const { data: quizzes } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('trainer_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(3)
+      if (!user || !trainer) {
+        console.log('👤 No user or trainer found, waiting...')
+        return
+      }
 
-      // Get all quizzes for the modal
-      const { data: allQuizzesData } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('trainer_id', user.id)
-        .order('created_at', { ascending: false })
+      console.log('📊 Loading dashboard data for trainer:', trainer.email)
 
-      setRecentQuizzes(quizzes || [])
-      setAllQuizzes(allQuizzesData || [])
+      // For now, get all quizzes since we migrated from Supabase with different trainer IDs
+      // In production, you'd want to query by trainer.email or remap the trainer IDs
+      const recentQuizzesQuery = query(
+        collection(db, 'quizzes'),
+        orderBy('createdAt', 'desc'),
+        limit(3)
+      )
+
+      const allQuizzesQuery = query(
+        collection(db, 'quizzes'),
+        orderBy('createdAt', 'desc')
+      )
+
+      const [recentSnapshot, allSnapshot] = await Promise.all([
+        getDocs(recentQuizzesQuery),
+        getDocs(allQuizzesQuery)
+      ])
+
+      const recentQuizzes = recentSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
+
+      const allQuizzes = allSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
+
+      console.log('✅ Loaded quizzes:', recentQuizzes.length, 'recent,', allQuizzes.length, 'total')
+      setRecentQuizzes(recentQuizzes)
+      setAllQuizzes(allQuizzes)
     } catch (error) {
-      console.error('Error loading dashboard data:', error)
+      console.error('💥 Error loading dashboard data:', error)
     } finally {
       setLoading(false)
     }
   }
 
-  const generateSessionCode = () => {
-    // Generate a more robust 6-character code with better entropy
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // Avoid confusing characters like 0/O, 1/I
-    let code = ''
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length))
-    }
-    return code
-  }
 
   const openQuizModal = () => {
     if (allQuizzes.length === 0) {
@@ -71,50 +87,46 @@ function AdminDashboard() {
       }
 
       if (!user) return
-      
+
       // Try to generate a unique session code (with retry logic)
       let sessionCode = generateSessionCode()
       let retries = 0
       const maxRetries = 5
-      
+
       while (retries < maxRetries) {
-        // Check if code already exists
-        const { data: existingSession } = await supabase
-          .from('quiz_sessions')
-          .select('id')
-          .eq('session_code', sessionCode)
-          .single()
-        
-        if (!existingSession) {
+        // Check if code already exists in Firebase
+        const existingSessionsQuery = query(
+          collection(db, 'sessions'),
+          where('sessionCode', '==', sessionCode),
+          limit(1)
+        )
+        const existingSnapshot = await getDocs(existingSessionsQuery)
+
+        if (existingSnapshot.empty) {
           break // Code is unique, we can use it
         }
-        
+
         // Generate a new code and try again
         sessionCode = generateSessionCode()
         retries++
       }
-      
+
       if (retries === maxRetries) {
         throw new Error('Could not generate unique session code. Please try again.')
       }
-      
-      const { data: session, error } = await supabase
-        .from('quiz_sessions')
-        .insert({
-          quiz_id: selectedQuiz.id,
-          trainer_id: user.id,
-          session_code: sessionCode,
-          status: 'waiting'
-        })
-        .select()
-        .single()
 
-      if (error) throw error
+      // Create session using Firebase
+      const sessionData = await createSession({
+        quizId: selectedQuiz.id,
+        trainerId: user.uid,
+        sessionCode: sessionCode,
+        quiz: selectedQuiz
+      })
 
       // Close modal and navigate to the quiz session page
       setShowQuizModal(false)
       setSelectedQuiz(null)
-      navigate(`/admin/session/${session.id}`)
+      navigate(`/admin/session/${sessionData.id}`)
     } catch (error) {
       console.error('Error starting quiz session:', error)
       alert(error.message || 'Error starting quiz session. Please try again.')
@@ -170,7 +182,7 @@ function AdminDashboard() {
       
       <main className="container mx-auto px-4 py-8">
         <div className="grid md:grid-cols-2 gap-8">
-          <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20">
+          <div className="rounded-lg shadow border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
             <div className="p-6 border-b border-gb-gold/20">
               <h2 className="text-xl font-semibold text-gb-navy font-serif">Quick Actions</h2>
             </div>
@@ -208,7 +220,7 @@ function AdminDashboard() {
                 </div>
               </button>
               
-              <button 
+              <button
                 onClick={() => navigate('/admin/results')}
                 className="flex items-center w-full p-4 border border-gb-gold/30 rounded-lg hover:bg-gb-gold/10 transition-colors"
               >
@@ -218,10 +230,24 @@ function AdminDashboard() {
                   <p className="text-gb-navy/70 text-sm">Review historical quiz results (28-day retention)</p>
                 </div>
               </button>
+
+              <button
+                onClick={() => navigate('/admin/scratch-card/setup')}
+                className="flex items-center w-full p-4 border border-gb-gold/30 rounded-lg hover:opacity-90 transition-all"
+                style={{
+                  background: 'linear-gradient(to right, color-mix(in srgb, var(--secondary-color) 10%, white), color-mix(in srgb, var(--secondary-color) 15%, white))'
+                }}
+              >
+                <Gift className="w-8 h-8 mr-4" style={{ color: 'var(--secondary-color)' }} />
+                <div className="text-left">
+                  <h3 className="font-semibold" style={{ color: 'var(--secondary-color)' }}>Scratch Card Giveaway</h3>
+                  <p className="text-sm" style={{ color: 'var(--secondary-color)', opacity: 0.8 }}>Create instant prize scratch cards</p>
+                </div>
+              </button>
             </div>
           </div>
           
-          <div className="bg-white/95 rounded-lg shadow border border-gb-gold/20">
+          <div className="rounded-lg shadow border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color, rgba(255,255,255,0.95))' }}>
             <div className="p-6 border-b border-gb-gold/20">
               <h2 className="text-xl font-semibold text-gb-navy font-serif">Recent Quizzes</h2>
             </div>
@@ -243,7 +269,7 @@ function AdminDashboard() {
                       <div>
                         <h3 className="font-semibold text-gb-navy">{quiz.title}</h3>
                         <p className="text-gb-navy/70 text-sm">
-                          {quiz.description} • {new Date(quiz.created_at).toLocaleDateString()}
+                          {quiz.description} • {quiz.createdAt?.toDate ? quiz.createdAt.toDate().toLocaleDateString() : new Date(quiz.createdAt).toLocaleDateString()}
                         </p>
                       </div>
                       <button
@@ -264,8 +290,8 @@ function AdminDashboard() {
 
       {/* Quiz Selection Modal */}
       {showQuizModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 border border-gb-gold/20">
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--backdrop-color, rgba(0,0,0,0.5))' }}>
+          <div className="rounded-lg shadow-xl max-w-md w-full mx-4 border border-gb-gold/20" style={{ backgroundColor: 'var(--surface-color, #ffffff)' }}>
             <div className="p-6 border-b border-gb-gold/20">
               <h2 className="text-xl font-semibold text-gb-navy font-serif">Select Quiz to Start</h2>
               <p className="text-gb-navy/70 mt-1">Choose which quiz you want to start a live session for</p>
@@ -289,7 +315,7 @@ function AdminDashboard() {
                       <h3 className="font-semibold text-gb-navy">{quiz.title}</h3>
                       <p className="text-gb-navy/70 text-sm">{quiz.description}</p>
                       <p className="text-gb-navy/50 text-xs mt-1">
-                        Created: {new Date(quiz.created_at).toLocaleDateString()}
+                        Created: {quiz.createdAt?.toDate ? quiz.createdAt.toDate().toLocaleDateString() : new Date(quiz.createdAt).toLocaleDateString()}
                       </p>
                     </div>
                   ))}

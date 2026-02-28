@@ -1,10 +1,19 @@
-import { createClient } from '@supabase/supabase-js'
+// Supabase client disabled - migrated to Firebase
+// This file is kept only to prevent import errors from components not yet migrated
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+console.warn('⚠️ Supabase client has been disabled - all functionality migrated to Firebase')
 
-// Debug environment variables
-console.log('🔧 Supabase URL:', supabaseUrl)
-console.log('🔧 Supabase Key:', supabaseAnonKey ? 'Key loaded ✅' : 'Key missing ❌')
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = {
+  // Stub object to prevent import errors
+  from: () => ({
+    select: () => ({
+      eq: () => ({
+        single: () => Promise.reject(new Error('Supabase disabled - use Firebase')),
+        order: () => Promise.reject(new Error('Supabase disabled - use Firebase'))
+      })
+    }),
+    insert: () => Promise.reject(new Error('Supabase disabled - use Firebase')),
+    update: () => Promise.reject(new Error('Supabase disabled - use Firebase')),
+    delete: () => Promise.reject(new Error('Supabase disabled - use Firebase'))
+  })
+}
