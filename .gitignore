@@ -35,3 +35,5 @@ npm-debug.log*
 # Firebase service account - NEVER COMMIT
 service-account.json
 *.json.backup
+.env
+traind-app/.env
