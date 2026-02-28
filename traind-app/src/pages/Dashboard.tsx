@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useBranding } from '../contexts/BrandingContext'
 import { LogOut, Play, Lock, ArrowRight, List, Settings, X } from 'lucide-react'
+import { OrgLogo } from '../components/OrgLogo'
 import { PlatformAdmin } from './PlatformAdmin'
 import { AVAILABLE_MODULES, type ModuleType } from '../lib/permissions'
-import { FirestoreService, type Quiz, type GameSession } from '../lib/firestore'
+import { FirestoreService, type Quiz, type GameSession, isPublished } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
 export const Dashboard: React.FC = () => {
@@ -85,8 +86,10 @@ export const Dashboard: React.FC = () => {
     setSelectedQuiz(null)
 
     try {
-      const quizList = await FirestoreService.getOrganizationQuizzes(currentOrganization.id)
-      setQuizzes(quizList)
+      const allQuizzes = await FirestoreService.getOrganizationQuizzes(currentOrganization.id)
+      // Show own quizzes + published team quizzes
+      const filtered = allQuizzes.filter(q => q.trainerId === user?.id || isPublished(q))
+      setQuizzes(filtered)
     } catch (error) {
       console.error('Error loading quizzes:', error)
     } finally {
@@ -101,7 +104,7 @@ export const Dashboard: React.FC = () => {
     setCreatingSession(true)
 
     try {
-      const sessionCode = FirestoreService.generateSessionCode()
+      const sessionCode = await FirestoreService.generateSessionCode()
 
       const sessionData: Partial<GameSession> = {
         organizationId: currentOrganization.id,
@@ -155,10 +158,12 @@ export const Dashboard: React.FC = () => {
       <header style={{ backgroundColor: 'var(--surface-color)', borderBottom: '1px solid var(--border-color)' }}>
         <div className="max-w-6xl mx-auto px-6">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
-              {brandingConfig?.logo && (
-                <img src={brandingConfig.logo} alt="Logo" className="h-8 w-auto" />
-              )}
+            <div className="flex items-center space-x-3">
+              <OrgLogo
+                logo={brandingConfig?.logo}
+                orgName={currentOrganization?.name}
+                size="md"
+              />
               <h1 className="text-lg font-semibold" style={{ color: 'var(--primary-color)' }}>
                 {currentOrganization?.name}
               </h1>

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Play, Users, Clock, BarChart, Plus, Eye, Trash2, QrCode, ArrowLeft } from 'lucide-react'
+import { Play, Users, Clock, BarChart, Plus, Eye, Trash2, QrCode, ArrowLeft, FileText, Search, Filter } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { OrgLogo } from '../components/OrgLogo'
 import { FirestoreService, type GameSession } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
@@ -10,6 +11,8 @@ export const SessionManagement: React.FC = () => {
   const { currentOrganization, hasPermission } = useAuth()
   const [sessions, setSessions] = useState<GameSession[]>([])
   const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'active' | 'completed'>('all')
 
   // Check permissions
   useEffect(() => {
@@ -20,23 +23,19 @@ export const SessionManagement: React.FC = () => {
   }, [hasPermission, navigate])
 
   useEffect(() => {
-    loadSessions()
-  }, [currentOrganization])
-
-  const loadSessions = async () => {
     if (!currentOrganization) return
 
     setLoading(true)
-    try {
-      const sessionList = await FirestoreService.getOrganizationSessions(currentOrganization.id)
-      setSessions(sessionList)
-    } catch (error) {
-      console.error('Error loading sessions:', error)
-      alert('Error loading sessions')
-    } finally {
-      setLoading(false)
-    }
-  }
+    const unsubscribe = FirestoreService.subscribeToOrganizationSessions(
+      currentOrganization.id,
+      (sessionList) => {
+        setSessions(sessionList)
+        setLoading(false)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [currentOrganization])
 
   const deleteSession = async (sessionId: string) => {
     if (!confirm('Are you sure you want to delete this session?')) {
@@ -56,8 +55,12 @@ export const SessionManagement: React.FC = () => {
     navigate('/session/create')
   }
 
-  const viewSessionDetails = (sessionId: string) => {
-    navigate(`/session/${sessionId}`)
+  const viewSessionDetails = (session: GameSession) => {
+    if (session.status === 'completed') {
+      navigate(`/session/${session.id}/report`)
+    } else {
+      navigate(`/session/${session.id}`)
+    }
   }
 
   const joinSession = (sessionCode: string) => {
@@ -88,6 +91,15 @@ export const SessionManagement: React.FC = () => {
     return labels[gameType] || gameType
   }
 
+  const filteredSessions = sessions.filter(s => {
+    if (statusFilter !== 'all' && s.status !== statusFilter) return false
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      return s.title.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)
+    }
+    return true
+  })
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -102,13 +114,18 @@ export const SessionManagement: React.FC = () => {
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/dashboard')}
                 className="p-2 text-text-secondary hover:text-primary transition-colors"
               >
                 <ArrowLeft size={20} />
               </button>
+              <OrgLogo
+                logo={currentOrganization?.branding?.logo}
+                orgName={currentOrganization?.name}
+                size="sm"
+              />
               <h1 className="text-xl font-bold text-primary">Session Management</h1>
             </div>
             <button
@@ -174,23 +191,64 @@ export const SessionManagement: React.FC = () => {
 
         {/* Sessions List */}
         <div className="card">
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
             <h2 className="text-xl font-bold">Training Sessions</h2>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
+                <input
+                  type="text"
+                  placeholder="Search by title or code..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="pl-9 pr-3 py-2 rounded-lg border text-sm w-full sm:w-56"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    backgroundColor: 'var(--background-color)',
+                    color: 'var(--text-color)'
+                  }}
+                />
+              </div>
+              <div className="relative">
+                <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none" />
+                <select
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value as any)}
+                  className="pl-9 pr-3 py-2 rounded-lg border text-sm appearance-none cursor-pointer"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    backgroundColor: 'var(--background-color)',
+                    color: 'var(--text-color)'
+                  }}
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="waiting">Waiting</option>
+                  <option value="active">Active</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            </div>
           </div>
 
-          {sessions.length === 0 ? (
+          {filteredSessions.length === 0 ? (
             <div className="text-center py-12">
               <Play className="mx-auto h-12 w-12 mb-4" style={{ color: 'var(--text-secondary-color)' }} />
-              <h3 className="text-lg font-medium mb-2" style={{ color: 'var(--text-color)' }}>No sessions yet</h3>
+              <h3 className="text-lg font-medium mb-2" style={{ color: 'var(--text-color)' }}>
+                {sessions.length === 0 ? 'No sessions yet' : 'No matching sessions'}
+              </h3>
               <p className="text-text-secondary mb-6">
-                Create your first training session to get started.
+                {sessions.length === 0
+                  ? 'Create your first training session to get started.'
+                  : 'Try adjusting your search or filter criteria.'}
               </p>
-              <button
-                onClick={createNewSession}
-                className="btn-primary"
-              >
-                Create Your First Session
-              </button>
+              {sessions.length === 0 && (
+                <button
+                  onClick={createNewSession}
+                  className="btn-primary"
+                >
+                  Create Your First Session
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -207,7 +265,7 @@ export const SessionManagement: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {sessions.map((session) => (
+                  {filteredSessions.map((session) => (
                     <tr key={session.id} className="border-b border-border" style={{ ['--tw-bg-opacity' as string]: 1 }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--hover-color)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
                       <td className="py-3 px-4">
                         <div>
@@ -266,11 +324,11 @@ export const SessionManagement: React.FC = () => {
                       <td className="py-3 px-4">
                         <div className="flex items-center space-x-2">
                           <button
-                            onClick={() => viewSessionDetails(session.id)}
+                            onClick={() => viewSessionDetails(session)}
                             className="text-primary hover:underline text-sm flex items-center space-x-1"
                           >
-                            <Eye size={14} />
-                            <span>View</span>
+                            {session.status === 'completed' ? <FileText size={14} /> : <Eye size={14} />}
+                            <span>{session.status === 'completed' ? 'Report' : 'View'}</span>
                           </button>
                           {session.status === 'waiting' && (
                             <button

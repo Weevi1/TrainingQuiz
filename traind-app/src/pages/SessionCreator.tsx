@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Save, ArrowLeft, Users, Clock, Settings, Play, QrCode, Target, Eye } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { FirestoreService, type GameSession, type Quiz } from '../lib/firestore'
+import { OrgLogo } from '../components/OrgLogo'
+import { FirestoreService, type GameSession, type Quiz, isPublished } from '../lib/firestore'
 import { PermissionService, AVAILABLE_MODULES, type ModuleType } from '../lib/permissions'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
@@ -69,10 +70,9 @@ export const SessionCreator: React.FC = () => {
   // Generate session code
   useEffect(() => {
     if (!session.code) {
-      setSession(prev => ({
-        ...prev,
-        code: FirestoreService.generateSessionCode()
-      }))
+      FirestoreService.generateSessionCode().then(code => {
+        setSession(prev => ({ ...prev, code }))
+      })
     }
   }, [session.code])
 
@@ -81,8 +81,12 @@ export const SessionCreator: React.FC = () => {
 
     setLoading(true)
     try {
-      const quizList = await FirestoreService.getOrganizationQuizzes(currentOrganization.id)
-      setQuizzes(quizList)
+      const allQuizzes = await FirestoreService.getOrganizationQuizzes(currentOrganization.id)
+      // Admins see all quizzes; trainers see own + published
+      const filtered = hasPermission('manage_content')
+        ? allQuizzes
+        : allQuizzes.filter(q => q.trainerId === user?.id || isPublished(q))
+      setQuizzes(filtered)
     } catch (error) {
       console.error('Error loading quizzes:', error)
       alert('Error loading quizzes')
@@ -166,6 +170,17 @@ export const SessionCreator: React.FC = () => {
 
       if (['quiz', 'millionaire', 'speedround'].includes(session.gameType || '') && selectedQuizId) {
         gameData = { ...gameData, quizId: selectedQuizId }
+
+        // Denormalize CPD settings from quiz to session (avoids re-fetching quiz for certificates)
+        const selectedQuiz = quizzes.find(q => q.id === selectedQuizId)
+        if (selectedQuiz?.settings?.cpdEnabled) {
+          gameData.cpd = {
+            enabled: true,
+            points: selectedQuiz.settings.cpdPoints || 1,
+            requiresPass: selectedQuiz.settings.cpdRequiresPass || false,
+            passingScore: selectedQuiz.settings.passingScore
+          }
+        }
       }
 
       if (session.gameType === 'bingo') {
@@ -228,13 +243,18 @@ export const SessionCreator: React.FC = () => {
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/sessions')}
                 className="p-2 text-text-secondary hover:text-primary transition-colors"
               >
                 <ArrowLeft size={20} />
               </button>
+              <OrgLogo
+                logo={currentOrganization?.branding?.logo}
+                orgName={currentOrganization?.name}
+                size="sm"
+              />
               <h1 className="text-xl font-bold text-primary">Create Training Session</h1>
             </div>
             <button
@@ -298,10 +318,10 @@ export const SessionCreator: React.FC = () => {
                   onChange={(e) => setSession(prev => ({ ...prev, code: e.target.value.toUpperCase() }))}
                   className="input font-mono"
                   placeholder="AUTO-GENERATED"
-                  maxLength={6}
+                  maxLength={2}
                 />
                 <button
-                  onClick={() => setSession(prev => ({ ...prev, code: FirestoreService.generateSessionCode() }))}
+                  onClick={async () => { const code = await FirestoreService.generateSessionCode(); setSession(prev => ({ ...prev, code })) }}
                   className="btn-secondary btn-sm"
                 >
                   Generate

@@ -164,8 +164,8 @@ export const applyOrganizationBranding = async (branding: OrganizationBranding |
   root.style.setProperty('--border-color', effectiveColors.border)
 
   // ===== APPLY TYPOGRAPHY =====
-  const fontFamily = getFontFamilyCSS(effectiveTypography.fontFamily.split(',')[0].trim())
-  const fontFamilyHeading = getFontFamilyCSS(effectiveTypography.fontFamilyHeading.split(',')[0].trim())
+  const fontFamily = getFontFamilyCSS(effectiveTypography.fontFamily.split(',')[0].trim().replace(/['"]/g, ''))
+  const fontFamilyHeading = getFontFamilyCSS(effectiveTypography.fontFamilyHeading.split(',')[0].trim().replace(/['"]/g, ''))
 
   root.style.setProperty('--font-family', fontFamily)
   root.style.setProperty('--font-family-heading', fontFamilyHeading)
@@ -179,6 +179,9 @@ export const applyOrganizationBranding = async (branding: OrganizationBranding |
   // ===== APPLY EFFECTS =====
   root.style.setProperty('--border-radius', borderRadiusMap[effectiveEffects.borderRadius])
   root.style.setProperty('--shadow-style', shadowMap[effectiveEffects.shadowIntensity])
+
+  // ===== APPLY LOGO STYLE =====
+  root.style.setProperty('--logo-border-radius', branding.logoRounded ? '0.75rem' : '0')
 
   // ===== APPLY GAME-SPECIFIC THEMES =====
   // Millionaire

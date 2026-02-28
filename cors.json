@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://traind-platform.web.app",
+      "https://traind-platform.firebaseapp.com",
+      "https://trained.fifo.systems",
+      "http://localhost:5173"
+    ],
+    "method": ["GET"],
+    "maxAgeSeconds": 3600
+  }
+]

@@ -75,20 +75,20 @@ export const PresenterStats: React.FC<PresenterStatsProps> = ({
 
   return (
     <div
-      className="rounded-xl p-3 mt-3"
+      className="rounded-xl p-5 mt-4"
       style={{ backgroundColor: 'var(--surface-color)', border: '1px solid var(--border-color)' }}
     >
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-4 gap-4">
         {boxes.map((box) => (
           <div key={box.label} className="text-center">
             <div
-              className="text-2xl font-bold"
+              className="text-4xl font-bold"
               style={{ color: box.color }}
             >
               {box.value}
             </div>
             <div
-              className="text-xs"
+              className="text-lg"
               style={{ color: 'var(--text-secondary-color)' }}
             >
               {box.label}

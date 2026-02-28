@@ -20,6 +20,7 @@ import type { OrganizationBranding } from '../lib/firestore'
 interface BrandingConfig {
   // Legacy fields (for backwards compatibility)
   logo?: string
+  logoRounded?: boolean
   primaryColor: string
   secondaryColor: string
   theme: 'corporate' | 'modern' | 'playful' | 'custom'
@@ -209,8 +210,9 @@ export const BrandingProvider: React.FC<BrandingProviderProps> = ({ children }) 
     root.style.setProperty('--border-color', effectiveColors.border)
 
     // ===== APPLY TYPOGRAPHY =====
-    const fontFamily = getFontFamilyCSS(effectiveTypography.fontFamily.split(',')[0].trim())
-    const fontFamilyHeading = getFontFamilyCSS(effectiveTypography.fontFamilyHeading.split(',')[0].trim())
+    // Strip quotes from font name — buildFontStack adds quotes (e.g. '"Inter"') but getFontFamilyCSS adds its own
+    const fontFamily = getFontFamilyCSS(effectiveTypography.fontFamily.split(',')[0].trim().replace(/['"]/g, ''))
+    const fontFamilyHeading = getFontFamilyCSS(effectiveTypography.fontFamilyHeading.split(',')[0].trim().replace(/['"]/g, ''))
 
     root.style.setProperty('--font-family', fontFamily)
     root.style.setProperty('--font-family-heading', fontFamilyHeading)
@@ -224,6 +226,9 @@ export const BrandingProvider: React.FC<BrandingProviderProps> = ({ children }) 
     // ===== APPLY EFFECTS =====
     root.style.setProperty('--border-radius', borderRadiusMap[effectiveEffects.borderRadius])
     root.style.setProperty('--shadow-style', shadowMap[effectiveEffects.shadowIntensity])
+
+    // ===== APPLY LOGO STYLE =====
+    root.style.setProperty('--logo-border-radius', config.logoRounded ? '0.75rem' : '0')
 
     // ===== APPLY GAME-SPECIFIC THEMES =====
     // Millionaire
@@ -305,6 +310,7 @@ export const BrandingProvider: React.FC<BrandingProviderProps> = ({ children }) 
     return {
       // Legacy fields
       logo: orgBranding.logo,
+      logoRounded: orgBranding.logoRounded,
       primaryColor: orgBranding.primaryColor,
       secondaryColor: orgBranding.secondaryColor,
       theme: orgBranding.theme,

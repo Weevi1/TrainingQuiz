@@ -69,6 +69,7 @@ export const CountdownOverlay: React.FC<CountdownOverlayProps> = ({
             src={organizationLogo}
             alt="Organization"
             className="h-16 mx-auto mb-6 object-contain"
+            style={{ borderRadius: 'var(--logo-border-radius, 0)' }}
           />
         )}
 

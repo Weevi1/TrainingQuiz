@@ -22,13 +22,13 @@ export const ThemePresetGallery: React.FC<ThemePresetGalleryProps> = ({
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {Object.entries(presets).map(([id, preset]) => (
+        {presets.map((preset) => (
           <ThemePresetCard
-            key={id}
-            id={id as ThemePresetId}
+            key={preset.id}
+            id={preset.id}
             preset={preset}
-            isSelected={selectedPreset === id}
-            onSelect={() => onSelectPreset(id as ThemePresetId)}
+            isSelected={selectedPreset === preset.id}
+            onSelect={() => onSelectPreset(preset.id)}
           />
         ))}
       </div>
@@ -118,9 +118,9 @@ const ThemePresetCard: React.FC<ThemePresetCardProps> = ({
 
       {/* Preset info */}
       <div className="space-y-1">
-        <h4 className="font-medium capitalize">{id.replace(/-/g, ' ')}</h4>
+        <h4 className="font-medium">{preset.name}</h4>
         <p className="text-xs text-text-secondary line-clamp-2">
-          {getPresetDescription(id)}
+          {preset.description}
         </p>
       </div>
 
@@ -162,22 +162,6 @@ const ThemePresetCard: React.FC<ThemePresetCardProps> = ({
       </div>
     </button>
   )
-}
-
-function getPresetDescription(id: ThemePresetId): string {
-  const descriptions: Record<ThemePresetId, string> = {
-    'corporate-blue': 'Professional blue theme perfect for business training',
-    'modern-dark': 'Sleek dark theme with cyan accents for tech companies',
-    'fairytale': 'Magical purple and gold theme with elegant fonts',
-    'legal-professional': 'Navy and gold for law firms and professional services',
-    'healthcare': 'Calming teal and green for medical and health organizations',
-    'tech-modern': 'Bold violet gradients for innovative tech companies',
-    'nature-green': 'Organic green theme for eco-conscious organizations',
-    'playful-bright': 'Vibrant pink and yellow for fun, engaging training',
-    'custom': 'Start from scratch with your own colors and fonts'
-  }
-
-  return descriptions[id] || 'Custom theme preset'
 }
 
 export default ThemePresetGallery

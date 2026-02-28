@@ -71,6 +71,7 @@ export default {
         },
       },
       fontFamily: {
+        sans: 'var(--font-family)',
         brand: 'var(--font-family)',
         heading: 'var(--font-family-heading)',
       },

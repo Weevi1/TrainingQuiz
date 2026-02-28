@@ -3,7 +3,7 @@ import { MillionaireGame } from './MillionaireGame'
 import { BingoGame } from './BingoGame'
 import { SpeedRoundGame } from './SpeedRoundGame'
 import { SpotTheDifferenceGame } from './SpotTheDifferenceGame'
-import { type GameSession, type Quiz, type Participant } from '../../lib/firestore'
+import { type GameSession, type Quiz, type Participant, type OrganizationBranding } from '../../lib/firestore'
 import { type ModuleType } from '../../lib/permissions'
 
 interface GameDispatcherProps {
@@ -19,6 +19,7 @@ interface GameDispatcherProps {
   sessionSettings?: GameSession['settings']
   sessionId?: string
   participantId?: string
+  reactions?: OrganizationBranding['reactions']
 }
 
 // Sample data generators for each game type
@@ -316,7 +317,8 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
   onKicked,
   sessionSettings: _sessionSettings,
   sessionId,
-  participantId
+  participantId,
+  reactions
 }) => {
   const handleGameComplete = (score: number, additionalData?: any) => {
     onGameComplete(score, additionalData)
@@ -343,6 +345,7 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
           timeLimit={45} // 45 seconds per question
           sessionId={sessionId}
           participantId={participantId}
+          reactions={reactions}
         />
       )
 
@@ -350,6 +353,7 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
       return (
         <BingoGame
           items={generateBingoItems(gameData.quiz)}
+          questions={gameData.quiz?.questions}
           cardSize={5}
           onGameComplete={(score, bingoGameState) =>
             handleGameComplete(score, { gameState: bingoGameState, gameType: 'bingo' })
@@ -361,6 +365,7 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
           winCondition="line"
           sessionId={sessionId}
           participantId={participantId}
+          reactions={reactions}
         />
       )
 
@@ -376,6 +381,7 @@ export const GameDispatcher: React.FC<GameDispatcherProps> = ({
           enableSkip={true}
           sessionId={sessionId}
           participantId={participantId}
+          reactions={reactions}
         />
       )
 

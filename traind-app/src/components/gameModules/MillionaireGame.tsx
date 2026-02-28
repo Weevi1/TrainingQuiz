@@ -6,7 +6,7 @@ import { useVisualEffects } from '../../lib/visualEffects'
 import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
 import { useGameTheme, getCorrectStyle, getIncorrectStyle, getSelectedStyle } from '../../hooks/useGameTheme'
-import { FirestoreService } from '../../lib/firestore'
+import { FirestoreService, type OrganizationBranding } from '../../lib/firestore'
 
 interface MillionaireQuestion {
   id: string
@@ -42,6 +42,7 @@ interface MillionaireGameProps {
   participants?: EngagementParticipant[]
   sessionId?: string
   participantId?: string
+  reactions?: OrganizationBranding['reactions']
 }
 
 const MONEY_LADDER = [
@@ -69,7 +70,8 @@ export const MillionaireGame: React.FC<MillionaireGameProps> = ({
   participantName,
   participants = [],
   sessionId,
-  participantId
+  participantId,
+  reactions: _reactions
 }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [currentWinnings, setCurrentWinnings] = useState(0)

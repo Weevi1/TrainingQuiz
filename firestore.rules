@@ -122,6 +122,13 @@ service cloud.firestore {
         allow read: if isOrgMember(orgId);
         allow write: if isPlatformAdmin() || (isOrgMember(orgId) && hasMinRole(orgId, 'ORG_ADMIN'));
       }
+
+      // Team invitations
+      match /invitations/{inviteId} {
+        allow read: if isAuthenticated();
+        allow create: if isOrgMember(orgId) && hasMinRole(orgId, 'ORG_ADMIN');
+        allow update: if isAuthenticated();
+      }
     }
 
     // Production environment organizations (same structure but no dev- prefix)
@@ -178,6 +185,13 @@ service cloud.firestore {
       match /settings/{document=**} {
         allow read: if isOrgMember(orgId);
         allow write: if isPlatformAdmin() || (isOrgMember(orgId) && hasMinRole(orgId, 'ORG_ADMIN'));
+      }
+
+      // Team invitations
+      match /invitations/{inviteId} {
+        allow read: if isAuthenticated();
+        allow create: if isOrgMember(orgId) && hasMinRole(orgId, 'ORG_ADMIN');
+        allow update: if isAuthenticated();
       }
     }
 

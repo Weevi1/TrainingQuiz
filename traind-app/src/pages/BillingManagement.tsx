@@ -5,6 +5,7 @@ import {
   Check, AlertCircle, CheckCircle, Mail, Phone, MessageCircle
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { OrgLogo } from '../components/OrgLogo'
 import { BillingService, PLAN_PRICING, type PlanType } from '../lib/billing'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
@@ -39,7 +40,12 @@ export const BillingManagement: React.FC = () => {
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
+              <OrgLogo
+                logo={currentOrganization?.branding?.logo}
+                orgName={currentOrganization?.name}
+                size="sm"
+              />
               <h1 className="text-xl font-bold text-primary">Subscription & Billing</h1>
             </div>
             <button

@@ -7,6 +7,7 @@ import {
   Zap, Trophy, Target, X, Medal, Star
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { OrgLogo } from '../components/OrgLogo'
 import { FirestoreService, type GameSession, type Quiz, type Participant } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { soundSystem } from '../lib/soundSystem'
@@ -20,6 +21,7 @@ import { PresenterLeaderboard } from '../components/presenter/PresenterLeaderboa
 import { PresenterStats } from '../components/presenter/PresenterStats'
 import { PresenterCanvas } from '../components/presenter/PresenterCanvas'
 import { usePresenterSounds } from '../hooks/usePresenterSounds'
+import { AvatarDisplay } from '../components/AvatarDisplay'
 
 type SessionStatus = 'waiting' | 'active' | 'paused' | 'completed'
 
@@ -210,8 +212,11 @@ export const SessionControl: React.FC = () => {
 
       // Sync timer state from Firestore when session becomes active
       if (updatedSession.status === 'active' && updatedSession.timerStartedAt) {
-        timerStartedAtRef.current = updatedSession.timerStartedAt
-        if (updatedSession.sessionTimeLimit) {
+        // Only update anchor if Firestore value changed (avoid jumps during resubscribe)
+        if (updatedSession.timerStartedAt !== timerStartedAtRef.current) {
+          timerStartedAtRef.current = updatedSession.timerStartedAt
+        }
+        if (updatedSession.sessionTimeLimit && updatedSession.sessionTimeLimit !== sessionTimeLimitRef.current) {
           sessionTimeLimitRef.current = updatedSession.sessionTimeLimit
         }
 
@@ -373,7 +378,7 @@ export const SessionControl: React.FC = () => {
       // Restore timer from Firestore anchor (handles page refresh during active session)
       const totalTimeLimit = realSession.gameType === 'bingo'
         ? (realSession.settings?.timeLimit || 900)
-        : realQuiz.timeLimit * realQuiz.questions.length
+        : (realQuiz.timeLimit || 30) * (realQuiz.questions?.length || 1)
 
       sessionTimeLimitRef.current = totalTimeLimit
 
@@ -478,6 +483,7 @@ export const SessionControl: React.FC = () => {
 
   const startSession = async () => {
     if (!session) return
+    if (!confirm('Start the quiz now? Participants will see the countdown immediately.')) return
 
     try {
       // Play countdown sounds on presenter (training room speakers)
@@ -500,7 +506,7 @@ export const SessionControl: React.FC = () => {
           const timerStart = Date.now()
           const totalTimeLimit = isBingoSession
             ? (session.settings?.timeLimit || 900)
-            : (quiz ? quiz.timeLimit * quiz.questions.length : 300)
+            : (quiz ? (quiz.timeLimit || 30) * (quiz.questions?.length || 1) : 300)
 
           // Store anchor in refs for local calculation
           timerStartedAtRef.current = timerStart
@@ -598,7 +604,7 @@ export const SessionControl: React.FC = () => {
   const resetTimer = async () => {
     const totalTimeLimit = isBingoSession
       ? (session?.settings?.timeLimit || 900)
-      : (quiz ? quiz.timeLimit * quiz.questions.length : 300)
+      : (quiz ? (quiz.timeLimit || 30) * (quiz.questions?.length || 1) : 300)
 
     const newAnchor = Date.now()
     timerStartedAtRef.current = newAnchor
@@ -659,6 +665,7 @@ export const SessionControl: React.FC = () => {
   }
 
   const sessionUrl = `${window.location.origin}/join/${session.code}`
+  const JOIN_SHORT_DOMAIN = 'joinsession.xyz'
 
   return (
     <>
@@ -668,6 +675,7 @@ export const SessionControl: React.FC = () => {
         onComplete={() => {}}
         startFrom={3}
         sessionTitle={session.title}
+        organizationLogo={currentOrganization?.branding?.logo}
       />
     )}
 
@@ -676,13 +684,18 @@ export const SessionControl: React.FC = () => {
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/sessions')}
                 className="p-2 text-text-secondary hover:text-primary transition-colors"
               >
                 <ArrowLeft size={20} />
               </button>
+              <OrgLogo
+                logo={currentOrganization?.branding?.logo}
+                orgName={currentOrganization?.name}
+                size="sm"
+              />
               <div>
                 <h1 className="text-xl font-bold text-primary">{session.title}</h1>
                 <p className="text-sm text-text-secondary">Session Code: {session.code}</p>
@@ -741,9 +754,22 @@ export const SessionControl: React.FC = () => {
             {/* WAITING STATE: Full-width lobby for projector */}
             {session.status === 'waiting' && (
               <div className="h-full flex flex-col p-10">
-                {/* Session title */}
+                {/* Org logo + Session title */}
                 <div className="text-center mb-6">
-                  <h1 className="text-5xl font-bold" style={{ color: 'var(--text-color)' }}>
+                  {currentOrganization?.branding?.logo && (
+                    <img
+                      src={currentOrganization.branding.logo}
+                      alt={currentOrganization.name}
+                      className="h-28 mx-auto mb-2 object-contain"
+                      style={{ borderRadius: 'var(--logo-border-radius, 0)' }}
+                    />
+                  )}
+                  {currentOrganization?.branding?.logo && (
+                    <p className="text-2xl mb-2 italic" style={{ color: 'var(--text-secondary-color)', opacity: 0.7 }}>
+                      presents
+                    </p>
+                  )}
+                  <h1 className="text-6xl font-bold" style={{ color: 'var(--text-color)' }}>
                     {session.title}
                   </h1>
                 </div>
@@ -752,15 +778,18 @@ export const SessionControl: React.FC = () => {
                 <div className="flex-1 flex gap-12 min-h-0">
                   {/* Left: QR Code hero */}
                   <div className="flex flex-col items-center justify-center" style={{ width: '40%' }}>
-                    <div className="text-2xl font-medium mb-5" style={{ color: 'var(--text-secondary-color)' }}>
+                    <div className="text-3xl font-medium mb-5" style={{ color: 'var(--text-secondary-color)' }}>
                       Scan to join
                     </div>
                     <div className="p-5 rounded-2xl bg-white shadow-lg">
                       <QRCode value={sessionUrl} size={320} level="M" />
                     </div>
                     <div className="mt-5 text-center">
-                      <div className="text-lg break-all" style={{ color: 'var(--text-secondary-color)', opacity: 0.7 }}>
-                        {sessionUrl}
+                      <div className="text-2xl font-medium" style={{ color: 'var(--text-secondary-color)' }}>
+                        or go to <span className="font-bold" style={{ color: 'var(--text-color)' }}>{JOIN_SHORT_DOMAIN}</span>
+                      </div>
+                      <div className="text-4xl font-mono font-bold tracking-widest mt-2" style={{ color: 'var(--primary-color)' }}>
+                        {session.code}
                       </div>
                     </div>
                   </div>
@@ -813,7 +842,7 @@ export const SessionControl: React.FC = () => {
                                   className="w-12 h-12 rounded-full flex items-center justify-center text-2xl"
                                   style={{ backgroundColor: 'var(--primary-light-color)' }}
                                 >
-                                  {(participant as any).avatar || '\u{1F600}'}
+                                  <AvatarDisplay avatar={(participant as any).avatar} size="md" />
                                 </div>
                                 <div
                                   className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full border-2"
@@ -823,7 +852,7 @@ export const SessionControl: React.FC = () => {
                                   }}
                                 />
                               </div>
-                              <span className="text-xl font-medium truncate" style={{ color: 'var(--text-color)' }}>
+                              <span className="text-2xl font-medium truncate" style={{ color: 'var(--text-color)' }}>
                                 {participant.name}
                               </span>
                               <button
@@ -832,7 +861,7 @@ export const SessionControl: React.FC = () => {
                                 style={{ color: 'var(--error-color, #ef4444)' }}
                                 title={`Remove ${participant.name}`}
                               >
-                                <X size={20} />
+                                <X size={24} />
                               </button>
                             </div>
                           ))}
@@ -850,18 +879,18 @@ export const SessionControl: React.FC = () => {
                   {isBingoSession ? (
                     <>
                       <div className="flex items-center gap-3">
-                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Card Size</span>
-                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>5x5</span>
+                        <span className="text-2xl" style={{ color: 'var(--text-secondary-color)' }}>Card Size</span>
+                        <span className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>5x5</span>
                       </div>
-                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="w-px h-10" style={{ backgroundColor: 'var(--border-color)' }} />
                       <div className="flex items-center gap-3">
-                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Win</span>
-                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>Line</span>
+                        <span className="text-2xl" style={{ color: 'var(--text-secondary-color)' }}>Win</span>
+                        <span className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>Line</span>
                       </div>
-                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="w-px h-10" style={{ backgroundColor: 'var(--border-color)' }} />
                       <div className="flex items-center gap-3">
-                        <Clock size={24} style={{ color: 'var(--text-secondary-color)' }} />
-                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                        <Clock size={28} style={{ color: 'var(--text-secondary-color)' }} />
+                        <span className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>
                           {formatTime(session.settings?.timeLimit || 900)}
                         </span>
                       </div>
@@ -869,19 +898,19 @@ export const SessionControl: React.FC = () => {
                   ) : (
                     <>
                       <div className="flex items-center gap-3">
-                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Questions</span>
-                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>{quiz.questions.length}</span>
+                        <span className="text-2xl" style={{ color: 'var(--text-secondary-color)' }}>Questions</span>
+                        <span className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>{quiz.questions.length}</span>
                       </div>
-                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="w-px h-10" style={{ backgroundColor: 'var(--border-color)' }} />
                       <div className="flex items-center gap-3">
-                        <span className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Per Question</span>
-                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>{quiz.timeLimit}s</span>
+                        <span className="text-2xl" style={{ color: 'var(--text-secondary-color)' }}>Per Question</span>
+                        <span className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>{quiz.timeLimit}s</span>
                       </div>
-                      <div className="w-px h-8" style={{ backgroundColor: 'var(--border-color)' }} />
+                      <div className="w-px h-10" style={{ backgroundColor: 'var(--border-color)' }} />
                       <div className="flex items-center gap-3">
-                        <Clock size={24} style={{ color: 'var(--text-secondary-color)' }} />
-                        <span className="text-2xl font-bold" style={{ color: 'var(--primary-color)' }}>
-                          {formatTime(quiz.timeLimit * quiz.questions.length)}
+                        <Clock size={28} style={{ color: 'var(--text-secondary-color)' }} />
+                        <span className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                          {formatTime((quiz?.timeLimit || 30) * (quiz?.questions?.length || 1))}
                         </span>
                       </div>
                     </>
@@ -898,10 +927,10 @@ export const SessionControl: React.FC = () => {
                   <div className="card mb-6">
                     <div className="flex flex-col items-center justify-center py-12">
                       <LoadingSpinner size="lg" />
-                      <h3 className="text-lg font-semibold mt-4" style={{ color: 'var(--text-color)' }}>
+                      <h3 className="text-3xl font-semibold mt-4" style={{ color: 'var(--text-color)' }}>
                         Finalising Results...
                       </h3>
-                      <p className="text-sm mt-2" style={{ color: 'var(--text-secondary-color)' }}>
+                      <p className="text-xl mt-2" style={{ color: 'var(--text-secondary-color)' }}>
                         Waiting for all participant scores to sync
                       </p>
                     </div>
@@ -919,6 +948,14 @@ export const SessionControl: React.FC = () => {
                       {/* Slide 1: Splash — fills available space, centered */}
                       <RevealSlot phase="splash" className="flex-1 flex">
                         <div className="flex flex-col items-center justify-center flex-1">
+                          {currentOrganization?.branding?.logo && (
+                            <img
+                              src={currentOrganization.branding.logo}
+                              alt={currentOrganization.name}
+                              className="h-16 mb-6 object-contain"
+                              style={{ borderRadius: 'var(--logo-border-radius, 0)' }}
+                            />
+                          )}
                           <Trophy size={80} style={{ color: 'var(--gold-color, #fbbf24)' }} />
                           <h1 className="text-6xl font-bold mt-8" style={{ color: 'var(--text-color)' }}>
                             Session Complete!
@@ -984,11 +1021,20 @@ export const SessionControl: React.FC = () => {
 
             {/* ACTIVE STATE: Full-width progress view */}
             {session.status === 'active' && (
-              <div className="h-full flex flex-col p-10">
+              <div className="h-full flex flex-col p-10 relative">
+                {/* Org logo watermark */}
+                {currentOrganization?.branding?.logo && (
+                  <img
+                    src={currentOrganization.branding.logo}
+                    alt=""
+                    className="absolute top-6 right-8 h-14 object-contain opacity-60"
+                    style={{ borderRadius: 'var(--logo-border-radius, 0)' }}
+                  />
+                )}
                 {/* Timer hero */}
                 <div className="text-center mb-4">
                   <div
-                    className={`text-8xl font-mono font-bold tabular-nums ${timeRemaining <= 60 ? 'animate-pulse' : ''}`}
+                    className={`text-9xl font-mono font-bold tabular-nums ${timeRemaining <= 60 ? 'animate-pulse' : ''}`}
                     style={{
                       color: timeRemaining <= 60 ? 'var(--error-color)' :
                         timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
@@ -997,13 +1043,13 @@ export const SessionControl: React.FC = () => {
                   >
                     {formatTime(timeRemaining)}
                   </div>
-                  <div className="w-full mt-3 rounded-full h-3" style={{ backgroundColor: 'var(--border-color)' }}>
+                  <div className="w-full mt-3 rounded-full h-4" style={{ backgroundColor: 'var(--border-color)' }}>
                     <div
-                      className="h-3 rounded-full transition-all duration-1000"
+                      className="h-4 rounded-full transition-all duration-1000"
                       style={{
                         width: `${(timeRemaining / (isBingoSession
                           ? (session.settings?.timeLimit || 900)
-                          : (quiz.timeLimit * quiz.questions.length)
+                          : ((quiz?.timeLimit || 30) * (quiz?.questions?.length || 1))
                         )) * 100}%`,
                         backgroundColor: timeRemaining <= 60 ? 'var(--error-color)' :
                           timeRemaining <= 120 ? 'var(--warning-color, #eab308)' :
@@ -1055,27 +1101,27 @@ export const SessionControl: React.FC = () => {
                             </div>
                           )}
                           {/* Avatar */}
-                          <span className="text-3xl flex-shrink-0">{(participant as any).avatar || '\u{1F600}'}</span>
+                          <AvatarDisplay avatar={(participant as any).avatar} size="lg" className="flex-shrink-0" />
                           {/* Name */}
                           <span className="text-2xl font-medium truncate" style={{ color: 'var(--text-color)', minWidth: 180 }}>
                             {participant.name}
                           </span>
                           {/* Status badge */}
                           {isCompleted && !isBingoSession && (
-                            <span className="px-3 py-1 rounded-full text-sm font-bold flex-shrink-0" style={{ backgroundColor: 'var(--success-color)', color: 'white' }}>
+                            <span className="px-4 py-1.5 rounded-full text-lg font-bold flex-shrink-0" style={{ backgroundColor: 'var(--success-color)', color: 'white' }}>
                               DONE
                             </span>
                           )}
                           {hasWon && isBingoSession && (
-                            <span className="px-3 py-1 rounded-full text-sm font-bold flex-shrink-0" style={{ backgroundColor: 'var(--gold-color, #fbbf24)', color: '#000' }}>
+                            <span className="px-4 py-1.5 rounded-full text-lg font-bold flex-shrink-0" style={{ backgroundColor: 'var(--gold-color, #fbbf24)', color: '#000' }}>
                               BINGO!
                             </span>
                           )}
                           {/* Progress bar */}
                           <div className="flex-1 mx-4">
-                            <div className="w-full rounded-full h-4" style={{ backgroundColor: 'var(--border-color)' }}>
+                            <div className="w-full rounded-full h-5" style={{ backgroundColor: 'var(--border-color)' }}>
                               <div
-                                className="h-4 rounded-full transition-all duration-500"
+                                className="h-5 rounded-full transition-all duration-500"
                                 style={{
                                   width: `${progress}%`,
                                   backgroundColor: isCompleted
@@ -1086,16 +1132,16 @@ export const SessionControl: React.FC = () => {
                             </div>
                           </div>
                           {/* Stats */}
-                          <div className="flex items-center gap-4 flex-shrink-0">
-                            <span className="text-xl tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
+                          <div className="flex items-center gap-5 flex-shrink-0">
+                            <span className="text-2xl tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
                               {isBingoSession ? `${cellsMarked}/${totalCells}` : `${answeredCount}/${totalQ}`}
                             </span>
                             {isBingoSession && linesCompleted > 0 && (
-                              <span className="text-xl font-medium" style={{ color: 'var(--success-color)' }}>
+                              <span className="text-2xl font-medium" style={{ color: 'var(--success-color)' }}>
                                 {linesCompleted} line{linesCompleted !== 1 ? 's' : ''}
                               </span>
                             )}
-                            <span className="text-2xl font-bold tabular-nums" style={{ color: 'var(--primary-color)', minWidth: 100, textAlign: 'right' }}>
+                            <span className="text-3xl font-bold tabular-nums" style={{ color: 'var(--primary-color)', minWidth: 120, textAlign: 'right' }}>
                               {score} pts
                             </span>
                           </div>
@@ -1112,35 +1158,35 @@ export const SessionControl: React.FC = () => {
 
                 {/* Bottom stats strip */}
                 <div
-                  className="flex items-center justify-around mt-4 py-4 rounded-xl"
+                  className="flex items-center justify-around mt-4 py-5 rounded-xl"
                   style={{ backgroundColor: 'var(--surface-color)' }}
                 >
                   <div className="text-center">
-                    <div className="text-3xl font-bold" style={{ color: 'var(--primary-color)' }}>{sessionStats.totalParticipants}</div>
-                    <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Playing</div>
+                    <div className="text-4xl font-bold" style={{ color: 'var(--primary-color)' }}>{sessionStats.totalParticipants}</div>
+                    <div className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Playing</div>
                   </div>
                   {isBingoSession ? (
                     <div className="text-center">
-                      <div className="text-3xl font-bold" style={{ color: 'var(--gold-color, #fbbf24)' }}>
+                      <div className="text-4xl font-bold" style={{ color: 'var(--gold-color, #fbbf24)' }}>
                         {participants.filter(p => p.gameState?.gameWon).length}
                       </div>
-                      <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>BINGOs</div>
+                      <div className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>BINGOs</div>
                     </div>
                   ) : (
                     <div className="text-center">
-                      <div className="text-3xl font-bold" style={{ color: 'var(--success-color)' }}>
+                      <div className="text-4xl font-bold" style={{ color: 'var(--success-color)' }}>
                         {sessionStats.completedCount}/{sessionStats.totalParticipants}
                       </div>
-                      <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Completed</div>
+                      <div className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Completed</div>
                     </div>
                   )}
                   <div className="text-center">
-                    <div className="text-3xl font-bold" style={{ color: 'var(--info-color, #2563eb)' }}>{sessionStats.averageScore}</div>
-                    <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Avg Score</div>
+                    <div className="text-4xl font-bold" style={{ color: 'var(--info-color, #2563eb)' }}>{sessionStats.averageScore}</div>
+                    <div className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Avg Score</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-3xl font-bold" style={{ color: 'var(--accent-color, #9333ea)' }}>{sessionStats.completionRate}%</div>
-                    <div className="text-base" style={{ color: 'var(--text-secondary-color)' }}>Complete</div>
+                    <div className="text-4xl font-bold" style={{ color: 'var(--accent-color, #9333ea)' }}>{sessionStats.completionRate}%</div>
+                    <div className="text-xl" style={{ color: 'var(--text-secondary-color)' }}>Complete</div>
                   </div>
                 </div>
               </div>
@@ -1163,7 +1209,9 @@ export const SessionControl: React.FC = () => {
                 />
               </div>
               <p className="text-2xl font-mono font-bold text-primary mb-2">{session.code}</p>
-              <p className="text-xs text-text-secondary mb-4 break-all">{sessionUrl}</p>
+              <p className="text-sm text-text-secondary mb-4">
+                Go to <span className="font-semibold">{JOIN_SHORT_DOMAIN}</span> and enter the code
+              </p>
               <div className="flex gap-2 justify-center">
                 <button
                   onClick={() => setShowFullscreenQR(true)}
@@ -1213,9 +1261,9 @@ export const SessionControl: React.FC = () => {
             </div>
 
             <div className="mb-8">
-              <p className="text-lg text-gray-500 mb-1">Go to</p>
-              <p className="text-2xl md:text-3xl text-blue-400 font-mono">
-                {window.location.origin}/join
+              <p className="text-lg text-gray-500 mb-1">Or go to</p>
+              <p className="text-3xl md:text-5xl text-blue-400 font-bold">
+                {JOIN_SHORT_DOMAIN}
               </p>
             </div>
 

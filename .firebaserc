@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "traind-platform"
-  }
+  },
+  "targets": {
+    "traind-platform": {
+      "hosting": {
+        "traind": [
+          "traind-platform"
+        ],
+        "joinsession": [
+          "joinsession-xyz"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

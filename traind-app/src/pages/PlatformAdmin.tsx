@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { FirestoreService } from '../lib/firestore'
 import type { Organization } from '../lib/firestore'
-import { Building, Users, CreditCard, BarChart, Plus, Settings, Crown, LogOut, Database, Edit2, Calendar, FileText, X, Check } from 'lucide-react'
+import { Building, Users, CreditCard, BarChart, Plus, Settings, Crown, LogOut, Database, Edit2, Calendar, FileText, X, Check, Palette } from 'lucide-react'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { BillingService, PLAN_PRICING, type PlanType } from '../lib/billing'
+import { BrandingEditor } from '../components/BrandingEditor'
 
 export const PlatformAdmin: React.FC = () => {
   const navigate = useNavigate()
@@ -29,6 +30,7 @@ export const PlatformAdmin: React.FC = () => {
     notes: ''
   })
   const [saving, setSaving] = useState(false)
+  const [managingTab, setManagingTab] = useState<'subscription' | 'branding'>('subscription')
 
   useEffect(() => {
     if (isPlatformAdmin()) {
@@ -273,6 +275,7 @@ export const PlatformAdmin: React.FC = () => {
 
   const openEditModal = (org: Organization) => {
     setEditingOrg(org)
+    setManagingTab('subscription')
     const expiresAt = org.subscription?.expiresAt
     setEditForm({
       plan: (org.subscription?.plan || 'basic') as PlanType,
@@ -647,12 +650,15 @@ export const PlatformAdmin: React.FC = () => {
 
       </main>
 
-      {/* Edit Subscription Modal */}
+      {/* Manage Organization Modal */}
       {editingOrg && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'var(--modal-overlay-color, rgba(0,0,0,0.5))' }}>
-          <div className="rounded-lg p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto" style={{ backgroundColor: 'var(--surface-color, #ffffff)' }}>
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold">Manage Subscription</h3>
+          <div
+            className={`rounded-lg p-6 w-full max-h-[90vh] overflow-y-auto transition-all ${managingTab === 'branding' ? 'max-w-4xl' : 'max-w-lg'}`}
+            style={{ backgroundColor: 'var(--surface-color, #ffffff)' }}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">Manage {editingOrg.name}</h3>
               <button
                 onClick={() => setEditingOrg(null)}
                 className="p-2 rounded transition-colors"
@@ -669,128 +675,168 @@ export const PlatformAdmin: React.FC = () => {
               <div className="text-sm text-text-secondary">{editingOrg.domain || 'No domain set'}</div>
             </div>
 
-            <div className="space-y-4">
-              {/* Plan Selection */}
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  <CreditCard size={16} className="inline mr-2" />
-                  Subscription Plan
-                </label>
-                <select
-                  value={editForm.plan}
-                  onChange={(e) => setEditForm({ ...editForm, plan: e.target.value as PlanType })}
-                  className="input w-full"
-                >
-                  {Object.entries(PLAN_PRICING).map(([key, plan]) => (
-                    <option key={key} value={key}>
-                      {plan.name} - {BillingService.formatZAR(plan.priceZAR)}/year
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-text-secondary mt-1">
-                  Modules: {PLAN_PRICING[editForm.plan].modules.join(', ')}
-                </p>
-              </div>
+            {/* Tab Bar */}
+            <div className="flex space-x-1 mb-6 p-1 rounded-lg" style={{ backgroundColor: 'var(--background-color, #f3f4f6)' }}>
+              <button
+                onClick={() => setManagingTab('subscription')}
+                className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                style={managingTab === 'subscription'
+                  ? { backgroundColor: 'var(--surface-color, #ffffff)', color: 'var(--primary-color, #2563eb)', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }
+                  : { color: 'var(--text-secondary-color, #6b7280)' }
+                }
+              >
+                <CreditCard size={16} />
+                <span>Subscription</span>
+              </button>
+              <button
+                onClick={() => setManagingTab('branding')}
+                className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                style={managingTab === 'branding'
+                  ? { backgroundColor: 'var(--surface-color, #ffffff)', color: 'var(--primary-color, #2563eb)', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }
+                  : { color: 'var(--text-secondary-color, #6b7280)' }
+                }
+              >
+                <Palette size={16} />
+                <span>Branding</span>
+              </button>
+            </div>
 
-              {/* Status */}
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  <Check size={16} className="inline mr-2" />
-                  Status
-                </label>
-                <select
-                  value={editForm.status}
-                  onChange={(e) => setEditForm({ ...editForm, status: e.target.value as typeof editForm.status })}
-                  className="input w-full"
-                >
-                  <option value="active">Active</option>
-                  <option value="trial">Trial</option>
-                  <option value="expired">Expired</option>
-                  <option value="suspended">Suspended</option>
-                </select>
-              </div>
+            {/* Subscription Tab */}
+            {managingTab === 'subscription' && (
+              <>
+                <div className="space-y-4">
+                  {/* Plan Selection */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      <CreditCard size={16} className="inline mr-2" />
+                      Subscription Plan
+                    </label>
+                    <select
+                      value={editForm.plan}
+                      onChange={(e) => setEditForm({ ...editForm, plan: e.target.value as PlanType })}
+                      className="input w-full"
+                    >
+                      {Object.entries(PLAN_PRICING).map(([key, plan]) => (
+                        <option key={key} value={key}>
+                          {plan.name} - {BillingService.formatZAR(plan.priceZAR)}/year
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Modules: {PLAN_PRICING[editForm.plan].modules.join(', ')}
+                    </p>
+                  </div>
 
-              {/* Expiry Date */}
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  <Calendar size={16} className="inline mr-2" />
-                  Expiry Date
-                </label>
-                <div className="flex space-x-2">
-                  <input
-                    type="date"
-                    value={editForm.expiresAt}
-                    onChange={(e) => setEditForm({ ...editForm, expiresAt: e.target.value })}
-                    className="input flex-1"
-                  />
+                  {/* Status */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      <Check size={16} className="inline mr-2" />
+                      Status
+                    </label>
+                    <select
+                      value={editForm.status}
+                      onChange={(e) => setEditForm({ ...editForm, status: e.target.value as typeof editForm.status })}
+                      className="input w-full"
+                    >
+                      <option value="active">Active</option>
+                      <option value="trial">Trial</option>
+                      <option value="expired">Expired</option>
+                      <option value="suspended">Suspended</option>
+                    </select>
+                  </div>
+
+                  {/* Expiry Date */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      <Calendar size={16} className="inline mr-2" />
+                      Expiry Date
+                    </label>
+                    <div className="flex space-x-2">
+                      <input
+                        type="date"
+                        value={editForm.expiresAt}
+                        onChange={(e) => setEditForm({ ...editForm, expiresAt: e.target.value })}
+                        className="input flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const oneYearFromNow = BillingService.calculateExpiryDate()
+                          setEditForm({ ...editForm, expiresAt: oneYearFromNow.toISOString().split('T')[0] })
+                        }}
+                        className="btn-secondary text-sm"
+                      >
+                        +1 Year
+                      </button>
+                    </div>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Set to 1 year from payment date
+                    </p>
+                  </div>
+
+                  {/* Invoice Reference */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      <FileText size={16} className="inline mr-2" />
+                      Invoice Reference
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.invoiceRef}
+                      onChange={(e) => setEditForm({ ...editForm, invoiceRef: e.target.value })}
+                      className="input w-full"
+                      placeholder="INV-2024-001"
+                    />
+                  </div>
+
+                  {/* Notes */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      Admin Notes
+                    </label>
+                    <textarea
+                      value={editForm.notes}
+                      onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                      className="input w-full"
+                      rows={3}
+                      placeholder="Payment received via EFT on..."
+                    />
+                  </div>
+                </div>
+
+                <div className="flex space-x-3 mt-6">
                   <button
-                    type="button"
-                    onClick={() => {
-                      const oneYearFromNow = BillingService.calculateExpiryDate()
-                      setEditForm({ ...editForm, expiresAt: oneYearFromNow.toISOString().split('T')[0] })
-                    }}
-                    className="btn-secondary text-sm"
+                    onClick={() => setEditingOrg(null)}
+                    className="flex-1 btn-secondary"
                   >
-                    +1 Year
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveSubscription}
+                    disabled={saving}
+                    className="flex-1 btn-primary flex items-center justify-center space-x-2"
+                  >
+                    {saving ? (
+                      <LoadingSpinner size="sm" />
+                    ) : (
+                      <>
+                        <Check size={16} />
+                        <span>Save Changes</span>
+                      </>
+                    )}
                   </button>
                 </div>
-                <p className="text-xs text-text-secondary mt-1">
-                  Set to 1 year from payment date
-                </p>
-              </div>
+              </>
+            )}
 
-              {/* Invoice Reference */}
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  <FileText size={16} className="inline mr-2" />
-                  Invoice Reference
-                </label>
-                <input
-                  type="text"
-                  value={editForm.invoiceRef}
-                  onChange={(e) => setEditForm({ ...editForm, invoiceRef: e.target.value })}
-                  className="input w-full"
-                  placeholder="INV-2024-001"
-                />
-              </div>
-
-              {/* Notes */}
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Admin Notes
-                </label>
-                <textarea
-                  value={editForm.notes}
-                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
-                  className="input w-full"
-                  rows={3}
-                  placeholder="Payment received via EFT on..."
-                />
-              </div>
-            </div>
-
-            <div className="flex space-x-3 mt-6">
-              <button
-                onClick={() => setEditingOrg(null)}
-                className="flex-1 btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveSubscription}
-                disabled={saving}
-                className="flex-1 btn-primary flex items-center justify-center space-x-2"
-              >
-                {saving ? (
-                  <LoadingSpinner size="sm" />
-                ) : (
-                  <>
-                    <Check size={16} />
-                    <span>Save Changes</span>
-                  </>
-                )}
-              </button>
-            </div>
+            {/* Branding Tab */}
+            {managingTab === 'branding' && (
+              <BrandingEditor
+                orgId={editingOrg.id}
+                organization={editingOrg}
+                onUpdate={loadPlatformData}
+              />
+            )}
           </div>
         </div>
       )}

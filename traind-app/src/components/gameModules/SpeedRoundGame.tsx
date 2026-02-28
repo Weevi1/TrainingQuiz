@@ -6,7 +6,8 @@ import { useVisualEffects } from '../../lib/visualEffects'
 import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
 import { useGameTheme, getCorrectStyle, getIncorrectStyle } from '../../hooks/useGameTheme'
-import { FirestoreService } from '../../lib/firestore'
+import { FirestoreService, type OrganizationBranding } from '../../lib/firestore'
+import { ReactionOverlay } from '../ReactionOverlay'
 
 interface SpeedQuestion {
   id: string
@@ -37,6 +38,7 @@ interface SpeedRoundGameProps {
   enableSkip?: boolean
   sessionId?: string
   participantId?: string
+  reactions?: OrganizationBranding['reactions']
 }
 
 interface GameStats {
@@ -82,7 +84,8 @@ export const SpeedRoundGame: React.FC<SpeedRoundGameProps> = ({
   questionTimeLimit = 10,
   enableSkip = true,
   sessionId,
-  participantId
+  participantId,
+  reactions
 }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)

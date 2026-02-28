@@ -12,9 +12,12 @@ import { JoinSession } from './pages/JoinSession'
 import { PlaySession } from './pages/PlaySession'
 import { ParticipantResults } from './pages/ParticipantResults'
 import { SessionControl } from './pages/SessionControl'
+import { AdminSessionDetails } from './pages/AdminSessionDetails'
 import { BillingManagement } from './pages/BillingManagement'
 import { BillingSuccess } from './pages/BillingSuccess'
 import { Settings } from './pages/Settings'
+import { AcceptInvite } from './pages/AcceptInvite'
+import { PlatformAdmin } from './pages/PlatformAdmin'
 import { ProtectedRoute } from './components/ProtectedRoute'
 
 function App() {
@@ -104,6 +107,15 @@ function App() {
               />
 
               <Route
+                path="/session/:sessionId/report"
+                element={
+                  <ProtectedRoute>
+                    <AdminSessionDetails />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
                 path="/session/:sessionId"
                 element={
                   <ProtectedRoute>
@@ -118,6 +130,16 @@ function App() {
                 element={
                   <ProtectedRoute>
                     <Settings />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Platform Admin */}
+              <Route
+                path="/admin"
+                element={
+                  <ProtectedRoute>
+                    <PlatformAdmin />
                   </ProtectedRoute>
                 }
               />
@@ -140,6 +162,9 @@ function App() {
                   </ProtectedRoute>
                 }
               />
+
+              {/* Invitation acceptance (public - handles own auth) */}
+              <Route path="/invite/accept" element={<AcceptInvite />} />
 
               {/* Participant routes (public - no authentication required) */}
               <Route path="/join" element={<JoinSession />} />

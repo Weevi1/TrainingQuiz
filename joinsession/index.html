@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Join Session</title>
+  <meta name="description" content="Enter your session code to join an interactive training session." />
+  <meta name="theme-color" content="#0f172a" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Shake animation for invalid input */
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-6px); }
+      40%, 80% { transform: translateX(6px); }
+    }
+    .shake { animation: shake 0.4s ease-in-out; }
+
+    /* Pulse on the submit button */
+    @keyframes gentle-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+    }
+    .pulse-ready { animation: gentle-pulse 2s ease-in-out infinite; }
+  </style>
+</head>
+<body class="bg-slate-900 min-h-screen flex flex-col items-center justify-center px-4 font-sans">
+
+  <div id="join-form" class="w-full max-w-sm text-center">
+    <!-- Header -->
+    <div class="mb-10">
+      <h1 class="text-3xl font-bold text-white mb-2">Join Session</h1>
+      <p class="text-slate-400 text-lg">Enter the code shown on screen</p>
+    </div>
+
+    <!-- Code Input -->
+    <div class="mb-6">
+      <input
+        id="code-input"
+        type="text"
+        inputmode="text"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="characters"
+        spellcheck="false"
+        maxlength="2"
+        placeholder="A7"
+        class="w-full text-center text-6xl font-mono font-bold tracking-[0.5em] bg-slate-800 text-white border-2 border-slate-600 rounded-xl px-4 py-6 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/30 transition-all placeholder:text-slate-600 placeholder:tracking-[0.5em]"
+      />
+    </div>
+
+    <!-- Submit Button -->
+    <button
+      id="join-btn"
+      disabled
+      class="w-full py-4 rounded-xl text-xl font-semibold transition-all disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed bg-green-600 text-white hover:bg-green-500 active:scale-[0.98]"
+    >
+      Join
+    </button>
+
+    <!-- Error message -->
+    <p id="error-msg" class="mt-4 text-red-400 text-sm hidden"></p>
+  </div>
+
+  <!-- Loading state -->
+  <div id="loading" class="hidden text-center">
+    <div class="inline-block w-10 h-10 border-4 border-slate-600 border-t-green-500 rounded-full animate-spin mb-4"></div>
+    <p class="text-slate-400 text-lg">Joining session...</p>
+  </div>
+
+  <!-- Footer -->
+  <div class="absolute bottom-6 text-center">
+    <a href="https://traind-platform.web.app" class="text-slate-600 text-sm hover:text-slate-400 transition-colors">
+      Powered by Trained
+    </a>
+  </div>
+
+  <script>
+    const TARGET_ORIGIN = 'https://traind-platform.web.app';
+    const input = document.getElementById('code-input');
+    const btn = document.getElementById('join-btn');
+    const errorMsg = document.getElementById('error-msg');
+    const joinForm = document.getElementById('join-form');
+    const loading = document.getElementById('loading');
+
+    // Check if URL path contains a code (e.g. joinsession.xyz/ABC123)
+    const pathCode = window.location.pathname.replace(/^\//, '').replace(/\/$/, '').toUpperCase();
+    if (/^[A-Z0-9]{2}$/.test(pathCode)) {
+      // Direct redirect — no form needed
+      joinForm.classList.add('hidden');
+      loading.classList.remove('hidden');
+      window.location.href = TARGET_ORIGIN + '/join/' + pathCode;
+    } else {
+      // Show form, auto-focus input
+      input.focus();
+    }
+
+    // Force uppercase as user types
+    input.addEventListener('input', function () {
+      this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const valid = this.value.length === 2;
+      btn.disabled = !valid;
+      if (valid) {
+        btn.classList.add('pulse-ready');
+      } else {
+        btn.classList.remove('pulse-ready');
+      }
+      errorMsg.classList.add('hidden');
+    });
+
+    // Submit on Enter
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && this.value.length === 2) {
+        goToSession();
+      }
+    });
+
+    btn.addEventListener('click', goToSession);
+
+    function goToSession() {
+      const code = input.value.trim().toUpperCase();
+      if (code.length !== 2) {
+        input.classList.add('shake');
+        setTimeout(() => input.classList.remove('shake'), 400);
+        return;
+      }
+      // Show loading, redirect
+      joinForm.classList.add('hidden');
+      loading.classList.remove('hidden');
+      window.location.href = TARGET_ORIGIN + '/join/' + code;
+    }
+  </script>
+</body>
+</html>

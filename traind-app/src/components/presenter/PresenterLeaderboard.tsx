@@ -1,6 +1,7 @@
 import React from 'react'
 import { Users } from 'lucide-react'
 import type { Participant, Quiz } from '../../lib/firestore'
+import { AvatarDisplay } from '../AvatarDisplay'
 
 interface PresenterLeaderboardProps {
   participants: Participant[]
@@ -57,13 +58,7 @@ function buildLeaderboard(
     const pct =
       answeredCount > 0
         ? Math.round((correctCount / totalQ) * 100)
-        : participant.finalScore || participant.gameState?.score
-          ? Math.round(
-              ((participant.finalScore || participant.gameState?.score || 0) /
-                (totalQ * 100)) *
-                100
-            )
-          : 0
+        : 0
 
     const avgTime =
       answeredCount > 0
@@ -128,49 +123,47 @@ export const PresenterLeaderboard: React.FC<PresenterLeaderboardProps> = ({
   return (
     <div>
       {/* Section header */}
-      <div className="flex items-center space-x-3 mb-3">
+      <div className="flex items-center space-x-4 mb-4">
         <div
-          className="p-1.5 rounded-lg"
+          className="p-2.5 rounded-xl"
           style={{ backgroundColor: 'var(--primary-color)' }}
         >
           <Users
-            size={18}
+            size={28}
             style={{ color: 'var(--text-on-primary-color, white)' }}
           />
         </div>
         <h2
-          className="text-xl font-bold"
+          className="text-3xl font-bold"
           style={{ color: 'var(--text-color)' }}
         >
           Final Leaderboard
         </h2>
       </div>
 
-      {/* Compact leaderboard rows — designed to fit ~15 in viewport */}
-      <div className="space-y-1">
+      {/* Leaderboard rows — sized for projector readability */}
+      <div className="space-y-2">
         {entries.map((entry) => (
           <div
             key={entry.participant.id}
-            className="flex items-center justify-between px-3 py-2 rounded-lg"
+            className="flex items-center justify-between px-5 py-3 rounded-xl"
             style={{ backgroundColor: getRankBackground(entry.rank) }}
           >
             {/* Left: rank + avatar + name */}
-            <div className="flex items-center space-x-3 min-w-0">
-              <div className="w-8 text-center text-lg font-bold flex-shrink-0">
+            <div className="flex items-center space-x-4 min-w-0">
+              <div className="w-12 text-center text-2xl font-bold flex-shrink-0">
                 {entry.medal || entry.rank}
               </div>
-              <span className="text-base flex-shrink-0">
-                {(entry.participant as any).avatar || '\u{1F600}'}
-              </span>
+              <AvatarDisplay avatar={(entry.participant as any).avatar} size="lg" className="flex-shrink-0" />
               <span
-                className="text-base font-medium truncate"
+                className="text-2xl font-medium truncate"
                 style={{ color: 'var(--text-color)' }}
               >
                 {entry.participant.name}
               </span>
               {entry.isCompleted && (
                 <span
-                  className="text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0"
+                  className="text-base px-2.5 py-1 rounded-lg font-medium flex-shrink-0"
                   style={{
                     backgroundColor: 'var(--success-light-color, #dcfce7)',
                     color: 'var(--success-color, #166534)',
@@ -183,31 +176,38 @@ export const PresenterLeaderboard: React.FC<PresenterLeaderboardProps> = ({
 
             {/* Right: score + avg time + streak — fixed-width columns for alignment */}
             <div className="flex items-center flex-shrink-0">
-              <div className="w-[70px] text-right">
+              <div className="w-[100px] text-right">
                 <span
-                  className="text-lg font-bold tabular-nums"
+                  className="text-2xl font-bold tabular-nums"
                   style={{ color: 'var(--primary-color)' }}
                 >
                   {entry.pct}%
                 </span>
               </div>
-              <div className="w-[50px] text-right">
+              <div className="w-[80px] text-right">
                 <span
-                  className="text-sm font-medium tabular-nums"
+                  className="text-xl font-medium tabular-nums"
                   style={{ color: 'var(--text-secondary-color)' }}
                 >
                   {entry.avgTime}s
                 </span>
               </div>
-              <div className="w-[55px] text-right">
+              <div className="w-[80px] text-right">
                 {entry.bestStreak >= 3 ? (
                   <span
-                    className="text-sm"
+                    className="text-xl"
                     style={{ color: 'var(--streak-color, #f97316)' }}
                   >
                     {'\u{1F525}'}{entry.bestStreak}
                   </span>
-                ) : null}
+                ) : (
+                  <span
+                    className="text-xl"
+                    style={{ color: 'var(--text-secondary-color)' }}
+                  >
+                    —
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -215,7 +215,7 @@ export const PresenterLeaderboard: React.FC<PresenterLeaderboardProps> = ({
 
         {participants.length === 0 && (
           <p
-            className="text-center py-4 text-base"
+            className="text-center py-6 text-xl"
             style={{ color: 'var(--text-secondary-color)' }}
           >
             No participants

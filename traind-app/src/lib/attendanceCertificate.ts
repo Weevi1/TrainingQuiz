@@ -1,5 +1,7 @@
 // Attendance Certificate PDF generation - print-friendly with tenant branding
 import jsPDF from 'jspdf'
+import { ref, getBlob } from 'firebase/storage'
+import { storage } from './firebase'
 
 export interface AttendanceCertificateData {
   participantName: string
@@ -19,6 +21,10 @@ export interface AttendanceCertificateData {
   totalQuestions?: number
   correctAnswers?: number
   passingScore?: number
+  // CPD (Continuing Professional Development)
+  cpdPoints?: number          // Number of CPD points available
+  cpdRequiresPass?: boolean   // Whether pass was required to earn CPD
+  cpdEarned?: boolean         // Whether this participant actually earned CPD
 }
 
 const formatDate = (date: Date): string => {
@@ -65,10 +71,11 @@ const sanitizeForPdf = (text: string): string => {
     .trim()
 }
 
-const loadImageAsBase64 = async (url: string): Promise<string | null> => {
+const loadImageForPdf = async (url: string): Promise<string | null> => {
   try {
-    const response = await fetch(url)
-    const blob = await response.blob()
+    // Use Firebase Storage SDK to download (bypasses CORS, uses storage rules: allow read if true)
+    const storageRef = ref(storage, url)
+    const blob = await getBlob(storageRef)
     return new Promise((resolve) => {
       const reader = new FileReader()
       reader.onloadend = () => resolve(reader.result as string)
@@ -76,8 +83,37 @@ const loadImageAsBase64 = async (url: string): Promise<string | null> => {
       reader.readAsDataURL(blob)
     })
   } catch {
-    return null
+    // Fallback to fetch for non-Firebase URLs (e.g. base64 or external)
+    try {
+      const response = await fetch(url)
+      if (!response.ok) return null
+      const blob = await response.blob()
+      return new Promise((resolve) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result as string)
+        reader.onerror = () => resolve(null)
+        reader.readAsDataURL(blob)
+      })
+    } catch {
+      return null
+    }
   }
+}
+
+/** Get natural dimensions of a base64/data URL image */
+const getImageDimensions = (dataUrl: string): Promise<{ width: number; height: number }> => {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    img.onerror = () => resolve({ width: 1, height: 1 })
+    img.src = dataUrl
+  })
+}
+
+/** Fit width×height into maxW×maxH preserving aspect ratio */
+const fitInBox = (w: number, h: number, maxW: number, maxH: number) => {
+  const scale = Math.min(maxW / w, maxH / h)
+  return { width: w * scale, height: h * scale }
 }
 
 // Draw a thin decorative divider with small diamond center
@@ -145,53 +181,78 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
   doc.line(pageWidth - cInset, pageHeight - cInset, pageWidth - cInset - cLen, pageHeight - cInset)
   doc.line(pageWidth - cInset, pageHeight - cInset, pageWidth - cInset, pageHeight - cInset - cLen)
 
+  // ── Pre-load images before calculating layout ──
+  let logoBase64: string | null = null
+  let signatureBase64: string | null = null
+
+  if (data.organizationLogo) {
+    try {
+      if (data.organizationLogo.startsWith('http')) {
+        logoBase64 = await loadImageForPdf(data.organizationLogo)
+      } else {
+        logoBase64 = data.organizationLogo // already base64
+      }
+    } catch { /* skip */ }
+  }
+
+  if (data.signatureImage) {
+    try {
+      if (data.signatureImage.startsWith('http')) {
+        signatureBase64 = await loadImageForPdf(data.signatureImage)
+      } else {
+        signatureBase64 = data.signatureImage
+      }
+    } catch { /* skip */ }
+  }
+
   // ── Content area — vertically centered between borders ──
-  const contentTop = 26
-  const contentBottom = pageHeight - 26
+  // Corner ornaments extend to y=34 (top) and y=176 (bottom on A4 landscape 210mm)
+  // Footer text at y=192. Keep content clear of all decorative elements.
+  const contentTop = 36
+  const contentBottom = pageHeight - 38
   const contentHeight = contentBottom - contentTop
 
-  // Calculate total content height to center everything
-  const hasLogo = !!data.organizationLogo
+  // Calculate heights based on what ACTUALLY loaded (not what was requested)
+  const hasLogo = !!logoBase64
   const hasScore = data.totalQuestions !== undefined && data.correctAnswers !== undefined
+  const hasCpd = !!data.cpdEarned && !!data.cpdPoints
   const hasOrg = !!data.organizationName
-  const hasSignature = !!data.signatureImage
+  const hasSignature = !!signatureBase64
   const hasSignerName = !!data.signerName
   const hasSignerTitle = !!data.signerTitle
 
-  // Estimate block heights
-  const logoH = hasLogo ? 28 : 0
-  const titleH = 16     // "Certificate of Attendance"
+  // Compact block heights — matched to actual rendered content per section
+  const logoH = hasLogo ? 26 : 0
+  const titleH = 15
   const divider1H = 10
   const certifyH = 8
-  const nameH = 16
+  const nameH = 15
   const attendedH = 8
   const sessionH = 12
   const divider2H = 10
-  const scoreH = hasScore ? 12 : 0
+  const scoreH = hasScore ? 8 : 0
+  const cpdH = hasCpd ? 10 : 0
   const dateH = 8
-  const signatureH = hasSignature ? 20 : 0  // space for signature image
-  const signerNameH = hasSignerName ? 7 : 0
-  const signerTitleH = hasSignerTitle ? 6 : 0
-  const issuedH = hasOrg || hasSignerName ? 22 : 0  // includes signature line
-  const totalH = logoH + titleH + divider1H + certifyH + nameH + attendedH + sessionH + divider2H + scoreH + dateH + signatureH + issuedH + signerNameH + signerTitleH
+  // Signature block: image sits above line, name/title/org below — treated as one unit
+  const sigBlockH = (hasSignature || hasSignerName || hasOrg) ? (
+    (hasSignature ? 16 : 0) +  // signature image (bottom-aligned above line)
+    2 +                         // line itself
+    (hasSignerName ? 5 : 0) +  // signer name
+    (hasSignerTitle ? 4 : 0) + // signer title
+    (hasOrg ? 4 : 0)           // org name
+  ) : 0
+  const totalH = logoH + titleH + divider1H + certifyH + nameH + attendedH + sessionH + divider2H + scoreH + cpdH + dateH + sigBlockH
 
-  let y = contentTop + (contentHeight - totalH) / 2
+  // Center vertically, but never go above contentTop
+  let y = Math.max(contentTop, contentTop + (contentHeight - totalH) / 2)
 
   // ── Organization logo ──
-  if (data.organizationLogo) {
+  if (logoBase64) {
     try {
-      let logoData = data.organizationLogo
-      if (logoData.startsWith('http')) {
-        const base64 = await loadImageAsBase64(logoData)
-        if (base64) logoData = base64
-        else logoData = ''
-      }
-      if (logoData) {
-        const logoMaxW = 45
-        const logoMaxH = 22
-        doc.addImage(logoData, 'AUTO', centerX - logoMaxW / 2, y, logoMaxW, logoMaxH)
-        y += logoH
-      }
+      const logoDims = await getImageDimensions(logoBase64)
+      const logoFit = fitInBox(logoDims.width, logoDims.height, 45, 22)
+      doc.addImage(logoBase64, 'PNG', centerX - logoFit.width / 2, y + (22 - logoFit.height) / 2, logoFit.width, logoFit.height)
+      y += logoH
     } catch {
       // Skip logo on error
     }
@@ -199,7 +260,7 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
 
   // ── Title ──
   doc.setTextColor(...primary)
-  doc.setFontSize(34)
+  doc.setFontSize(28)
   doc.setFont('helvetica', 'bold')
   doc.text('Certificate of Attendance', centerX, y + 10, { align: 'center' })
   y += titleH
@@ -210,28 +271,28 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
 
   // ── "This is to certify that" ──
   doc.setTextColor(100, 100, 100)
-  doc.setFontSize(13)
+  doc.setFontSize(12)
   doc.setFont('helvetica', 'normal')
   doc.text('This is to certify that', centerX, y + 5, { align: 'center' })
   y += certifyH
 
   // ── Participant Name ──
   doc.setTextColor(...primary)
-  doc.setFontSize(32)
+  doc.setFontSize(26)
   doc.setFont('helvetica', 'bold')
-  doc.text(participantName, centerX, y + 12, { align: 'center' })
+  doc.text(participantName, centerX, y + 10, { align: 'center' })
   y += nameH
 
   // ── "attended and participated in" ──
   doc.setTextColor(100, 100, 100)
-  doc.setFontSize(13)
+  doc.setFontSize(12)
   doc.setFont('helvetica', 'normal')
   doc.text('attended and participated in', centerX, y + 5, { align: 'center' })
   y += attendedH
 
   // ── Session Title ──
   doc.setTextColor(...secondary)
-  doc.setFontSize(22)
+  doc.setFontSize(18)
   doc.setFont('helvetica', 'bolditalic')
   doc.text(sessionTitle, centerX, y + 8, { align: 'center' })
   y += sessionH
@@ -248,83 +309,91 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
       ? `Score: ${pct}% (${data.correctAnswers}/${data.totalQuestions}) — Passed`
       : `Score: ${pct}% (${data.correctAnswers}/${data.totalQuestions})`
     doc.setTextColor(passed ? 34 : 100, passed ? 120 : 100, passed ? 69 : 100)
-    doc.setFontSize(12)
+    doc.setFontSize(11)
     doc.setFont('helvetica', 'bold')
     doc.text(resultText, centerX, y + 5, { align: 'center' })
     y += scoreH
   }
 
+  // ── CPD Points (if earned) ──
+  if (hasCpd) {
+    doc.setTextColor(...primary)
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    const pointsLabel = data.cpdPoints === 1 ? '1 CPD Point Awarded' : `${data.cpdPoints} CPD Points Awarded`
+    doc.text(pointsLabel, centerX, y + 5, { align: 'center' })
+    const basisLabel = data.cpdRequiresPass ? '(Pass Required)' : '(Attendance Based)'
+    doc.setTextColor(120, 120, 120)
+    doc.setFontSize(8)
+    doc.setFont('helvetica', 'normal')
+    doc.text(basisLabel, centerX, y + 9, { align: 'center' })
+    y += cpdH
+  }
+
   // ── Date ──
   doc.setTextColor(120, 120, 120)
-  doc.setFontSize(11)
+  doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
   doc.text(formatDate(data.completionDate), centerX, y + 5, { align: 'center' })
   y += dateH
 
-  // ── Signature image (if provided) ──
-  if (hasSignature) {
-    try {
-      let sigData = data.signatureImage!
-      if (sigData.startsWith('http')) {
-        const base64 = await loadImageAsBase64(sigData)
-        if (base64) sigData = base64
-        else sigData = ''
+  // ── Signature block: image → line → name → title → org ──
+  if (hasSignature || hasSignerName || hasOrg) {
+    // Signature image — bottom-aligned so it sits right above the line
+    if (signatureBase64) {
+      try {
+        const sigDims = await getImageDimensions(signatureBase64)
+        const sigFit = fitInBox(sigDims.width, sigDims.height, 45, 14)
+        // Place image so its bottom edge is 1mm above where the line will be
+        doc.addImage(signatureBase64, 'PNG', centerX - sigFit.width / 2, y + (16 - sigFit.height) - 1, sigFit.width, sigFit.height)
+        y += 16
+      } catch {
+        // Skip signature on error
       }
-      if (sigData) {
-        const sigW = 50
-        const sigH = 15
-        doc.addImage(sigData, 'AUTO', centerX - sigW / 2, y + 2, sigW, sigH)
-        y += signatureH
-      }
-    } catch {
-      // Skip signature on error
     }
-  }
 
-  // ── Issued by / Signature area ──
-  if (hasOrg || hasSignerName) {
-    y += 6
     // Signature line
     doc.setDrawColor(180, 180, 180)
     doc.setLineWidth(0.3)
-    doc.line(centerX - 40, y + 5, centerX + 40, y + 5)
-    y += 5
+    doc.line(centerX - 35, y, centerX + 35, y)
+    y += 2
 
-    // Signer name (bold, primary colour)
+    // Signer name — directly below line
     if (hasSignerName) {
       doc.setTextColor(...primary)
-      doc.setFontSize(12)
+      doc.setFontSize(10)
       doc.setFont('helvetica', 'bold')
-      doc.text(sanitizeForPdf(data.signerName!), centerX, y + 7, { align: 'center' })
-      y += signerNameH
+      doc.text(sanitizeForPdf(data.signerName!), centerX, y + 4, { align: 'center' })
+      y += 5
     }
 
-    // Signer title (lighter, smaller)
+    // Signer title — tight below name
     if (hasSignerTitle) {
       doc.setTextColor(120, 120, 120)
-      doc.setFontSize(10)
+      doc.setFontSize(8)
       doc.setFont('helvetica', 'italic')
-      doc.text(sanitizeForPdf(data.signerTitle!), centerX, y + 6, { align: 'center' })
-      y += signerTitleH
+      doc.text(sanitizeForPdf(data.signerTitle!), centerX, y + 3.5, { align: 'center' })
+      y += 4
     }
 
-    // Org name under signer info
+    // Org name — tight below title
     if (hasOrg) {
       doc.setTextColor(...primary)
-      doc.setFontSize(hasSignerName ? 10 : 12)
+      doc.setFontSize(hasSignerName ? 8 : 10)
       doc.setFont('helvetica', hasSignerName ? 'normal' : 'bold')
-      doc.text(data.organizationName!, centerX, y + 7, { align: 'center' })
+      doc.text(data.organizationName!, centerX, y + 3.5, { align: 'center' })
+      y += 4
     }
   }
 
-  // ── Footer — subtle, near bottom border ──
-  doc.setTextColor(180, 180, 180)
-  doc.setFontSize(7)
+  // ── Footer — between inner border (y=198) and outer border (y=202), well below content ──
+  doc.setTextColor(190, 190, 190)
+  doc.setFontSize(6)
   doc.setFont('helvetica', 'normal')
   doc.text(
     `Certificate ID: ${generateCertificateId(data)} | Generated by Trained Platform`,
     centerX,
-    pageHeight - 18,
+    pageHeight - 14,
     { align: 'center' }
   )
 

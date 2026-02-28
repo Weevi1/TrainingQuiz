@@ -19,7 +19,8 @@ import {
   type DocumentSnapshot,
   type CollectionReference,
   type DocumentReference,
-  type Query
+  type Query,
+  Timestamp
 } from 'firebase/firestore'
 import { db, firebaseEnv } from './firebase'
 
@@ -41,6 +42,22 @@ export type UserOrgRole = {
   permissions: string[]
 }
 
+export type Invitation = {
+  id: string
+  email: string
+  role: 'ORG_ADMIN' | 'TRAINER'
+  status: 'pending' | 'accepted' | 'revoked'
+  token: string
+  invitedBy: string
+  invitedByName: string
+  organizationId: string
+  organizationName: string
+  createdAt: Date
+  expiresAt: Date
+  acceptedAt?: Date
+  acceptedByUserId?: string
+}
+
 // Import theme types
 import type {
   ThemePresetId,
@@ -51,6 +68,15 @@ import type {
   ThemeEffects
 } from './themePresets'
 
+// Media item for reactions and stickers
+export type MediaItem = {
+  id: string
+  url: string
+  thumbnailUrl?: string
+  label: string
+  isBuiltIn?: boolean
+}
+
 export type OrganizationBranding = {
   // Legacy fields (maintained for backwards compatibility)
   logo?: string
@@ -59,28 +85,43 @@ export type OrganizationBranding = {
   theme: 'corporate' | 'modern' | 'playful' | 'custom'
   customCSS?: string
 
-  // NEW: Theme preset selection
+  // Theme preset selection
   themePreset?: ThemePresetId
 
-  // NEW: Complete color system
+  // Complete color system
   colors?: ThemeColors
 
-  // NEW: Typography settings
+  // Typography settings
   typography?: ThemeTypography
 
-  // NEW: Background configuration
+  // Background configuration
   background?: ThemeBackground
 
-  // NEW: Game-specific theme overrides
+  // Game-specific theme overrides
   gameTheme?: GameThemeOverrides
 
-  // NEW: Visual effects configuration
+  // Visual effects configuration
   effects?: ThemeEffects
+
+  // Logo display options
+  logoRounded?: boolean  // Apply rounded corners to logo
 
   // Certificate signature
   signatureUrl?: string
   signerName?: string    // e.g. "John Smith"
   signerTitle?: string   // e.g. "Training Manager"
+
+  // Custom media (reactions shown during quiz, sticker avatars)
+  reactions?: {
+    correct?: MediaItem[]
+    incorrect?: MediaItem[]
+    celebration?: MediaItem[]
+  }
+  stickers?: MediaItem[]
+
+  // Interstitial animation library
+  interstitialAnimations?: string[]   // IDs of enabled built-in Lottie animations for this org
+  customAnimations?: MediaItem[]      // Org-uploaded custom animations (MP4 with optional audio)
 }
 
 export type Organization = {
@@ -155,12 +196,28 @@ export type Question = {
   category?: string
 }
 
+// Interstitial animations between quiz questions
+export type InterstitialConfig = {
+  id: string                      // e.g. "int_abc123"
+  beforeQuestionIndex: number     // Show BEFORE this question (0 = before first question)
+  animationId: string             // ID of built-in Lottie or custom MediaItem
+  animationType: 'builtin' | 'custom'  // Resolution path
+  text?: string                   // Optional text overlay on top of animation
+  sound?: string                  // SoundType (for Lottie or silent MP4; MP4 with audio uses native)
+  durationMs?: number             // Override default duration
+  // Legacy fields (v1 compat — InterstitialOverlay falls back to CSS keyframe rendering)
+  style?: string
+  emoji?: string
+  effect?: string
+}
+
 export type Quiz = {
   id?: string
   title: string
   description: string
   timeLimit: number
   questions: Question[]
+  interstitials?: InterstitialConfig[]  // Animation breaks between questions
   organizationId: string
   trainerId: string
   settings: {
@@ -170,10 +227,18 @@ export type Quiz = {
     showExplanations: boolean
     shuffleQuestions: boolean
     passingScore: number
+    // CPD (Continuing Professional Development)
+    cpdEnabled?: boolean       // Whether this quiz awards CPD points
+    cpdPoints?: number         // How many CPD points (e.g. 1, 2, 5)
+    cpdRequiresPass?: boolean  // true = must meet passingScore; false = attendance only
   }
+  published?: boolean   // undefined/true = published, false = draft
   createdAt?: Date
   updatedAt?: Date
 }
+
+/** Backwards-compatible check: treat missing `published` as true (existing quizzes) */
+export const isPublished = (quiz: Quiz): boolean => quiz.published !== false
 
 export type Participant = {
   id: string
@@ -459,6 +524,28 @@ export class FirestoreService {
       startTime: doc.data().startTime?.toDate(),
       endTime: doc.data().endTime?.toDate()
     })) as GameSession[]
+  }
+
+  static subscribeToOrganizationSessions(
+    orgId: string,
+    callback: (sessions: GameSession[]) => void
+  ): () => void {
+    const sessionsQuery = query(
+      getSessionCollection(),
+      where('organizationId', '==', orgId),
+      orderBy('createdAt', 'desc')
+    )
+
+    return onSnapshot(sessionsQuery, (snapshot) => {
+      const sessions = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate(),
+        startTime: doc.data().startTime?.toDate(),
+        endTime: doc.data().endTime?.toDate()
+      })) as GameSession[]
+      callback(sessions)
+    })
   }
 
   // Real-time subscriptions
@@ -782,14 +869,79 @@ export class FirestoreService {
     })
   }
 
+  // Invitation operations
+  static async createInvitation(orgId: string, data: Omit<Invitation, 'id' | 'createdAt'>): Promise<string> {
+    const inviteRef = await addDoc(getOrgSubcollection(orgId, 'invitations'), {
+      ...data,
+      createdAt: serverTimestamp()
+    })
+    return inviteRef.id
+  }
+
+  static async getOrgInvitations(orgId: string, status?: string): Promise<Invitation[]> {
+    const constraints = status
+      ? [where('status', '==', status), orderBy('createdAt', 'desc')]
+      : [orderBy('createdAt', 'desc')]
+
+    const q = query(getOrgSubcollection(orgId, 'invitations'), ...constraints)
+    const snapshot = await getDocs(q)
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      expiresAt: doc.data().expiresAt?.toDate(),
+      acceptedAt: doc.data().acceptedAt?.toDate()
+    })) as Invitation[]
+  }
+
+  static async getInvitationByToken(orgId: string, token: string): Promise<Invitation | null> {
+    const q = query(
+      getOrgSubcollection(orgId, 'invitations'),
+      where('token', '==', token),
+      limit(1)
+    )
+    const snapshot = await getDocs(q)
+    if (snapshot.empty) return null
+
+    const doc = snapshot.docs[0]
+    return {
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      expiresAt: doc.data().expiresAt?.toDate(),
+      acceptedAt: doc.data().acceptedAt?.toDate()
+    } as Invitation
+  }
+
+  static async updateInvitation(orgId: string, inviteId: string, updates: Partial<Invitation>): Promise<void> {
+    await updateDoc(getOrgSubdoc(orgId, 'invitations', inviteId), updates)
+  }
+
+  // Team member operations
+  static async getOrgTeamMembers(orgId: string): Promise<User[]> {
+    const snapshot = await getDocs(getOrgUserCollection(orgId))
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate()
+    })) as User[]
+  }
+
   // Utility functions
-  static generateSessionCode(): string {
+  static async generateSessionCode(): Promise<string> {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    let result = ''
-    for (let i = 0; i < 6; i++) {
-      result += characters.charAt(Math.floor(Math.random() * characters.length))
+    for (let attempt = 0; attempt < 20; attempt++) {
+      let result = ''
+      for (let i = 0; i < 2; i++) {
+        result += characters.charAt(Math.floor(Math.random() * characters.length))
+      }
+      // Check no active/waiting session uses this code
+      const existing = await FirestoreService.findSessionByCode(result)
+      if (!existing) return result
     }
-    return result
+    // Extremely unlikely fallback — all 2-char codes in use among active sessions
+    throw new Error('Unable to generate unique session code. Too many concurrent sessions.')
   }
 }
 

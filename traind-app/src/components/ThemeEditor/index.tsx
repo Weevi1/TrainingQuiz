@@ -20,6 +20,7 @@ export interface ThemeEditorData {
 interface ThemeEditorProps {
   initialData?: Partial<ThemeEditorData>
   onSave: (data: ThemeEditorData) => Promise<void>
+  onPreview?: (data: ThemeEditorData) => void
   onCancel?: () => void
 }
 
@@ -28,6 +29,7 @@ type EditorTab = 'presets' | 'colors' | 'typography' | 'background'
 export const ThemeEditor: React.FC<ThemeEditorProps> = ({
   initialData,
   onSave,
+  onPreview,
   onCancel
 }) => {
   const [activeTab, setActiveTab] = useState<EditorTab>('presets')
@@ -51,9 +53,15 @@ export const ThemeEditor: React.FC<ThemeEditorProps> = ({
     initialData?.effects || getThemePreset('corporate-blue').effects || {}
   )
 
-  // Track changes
+  // Track changes and apply live preview
+  const isInitialMount = React.useRef(true)
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
     setHasChanges(true)
+    onPreview?.({ themePreset, colors, typography, background, effects })
   }, [themePreset, colors, typography, background, effects])
 
   // Load fonts when typography changes
@@ -94,16 +102,21 @@ export const ThemeEditor: React.FC<ThemeEditorProps> = ({
   }
 
   const handleReset = () => {
-    if (initialData) {
-      setThemePreset(initialData.themePreset || 'corporate-blue')
-      setColors(initialData.colors || getThemePreset('corporate-blue').colors)
-      setTypography(initialData.typography || {})
-      setBackground(initialData.background || { type: 'solid', value: '#f8fafc' })
-      setEffects(initialData.effects || {})
-    } else {
-      handlePresetSelect('corporate-blue')
-    }
+    const resetPreset = initialData?.themePreset || 'corporate-blue'
+    const preset = getThemePreset(resetPreset)
+    const resetColors = initialData?.colors || preset.colors
+    const resetTypography = initialData?.typography || preset.typography
+    const resetBackground = initialData?.background || preset.background
+    const resetEffects = initialData?.effects || preset.effects
+
+    setThemePreset(resetPreset)
+    setColors(resetColors)
+    setTypography(resetTypography)
+    setBackground(resetBackground)
+    setEffects(resetEffects)
     setHasChanges(false)
+
+    onPreview?.({ themePreset: resetPreset, colors: resetColors, typography: resetTypography, background: resetBackground, effects: resetEffects })
   }
 
   const tabs = [

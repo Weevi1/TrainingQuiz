@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { CheckCircle, Star, Trophy, Grid, Zap } from 'lucide-react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { CheckCircle, Star, Trophy, Grid, Zap, X } from 'lucide-react'
 import { LoadingSpinner } from '../LoadingSpinner'
 import { useGameSounds } from '../../lib/soundSystem'
 import { useVisualEffects } from '../../lib/visualEffects'
@@ -7,7 +7,8 @@ import { useAchievements } from '../../lib/achievementSystem'
 import { LiveEngagement } from '../LiveEngagement'
 import { SoundControl } from '../SoundControl'
 import { useGameTheme } from '../../hooks/useGameTheme'
-import { FirestoreService } from '../../lib/firestore'
+import { FirestoreService, type Question, type OrganizationBranding } from '../../lib/firestore'
+import { ReactionOverlay } from '../ReactionOverlay'
 
 interface BingoItem {
   id: string
@@ -43,6 +44,7 @@ interface EngagementParticipant {
 
 interface BingoGameProps {
   items: BingoItem[]
+  questions?: Question[]
   cardSize?: 3 | 4 | 5
   onGameComplete: (score: number, bingoGameState: BingoGameState) => void
   onKicked?: () => void
@@ -52,6 +54,7 @@ interface BingoGameProps {
   winCondition?: 'line' | 'full_card' | 'corners' | 'any_pattern'
   sessionId?: string
   participantId?: string
+  reactions?: OrganizationBranding['reactions']
 }
 
 interface CellState {
@@ -83,6 +86,7 @@ const RECOVERY_TIMEOUT_MS = 2 * 60 * 60 * 1000 // 2 hours
 
 export const BingoGame: React.FC<BingoGameProps> = ({
   items,
+  questions,
   cardSize = 5,
   onGameComplete,
   onKicked,
@@ -91,7 +95,8 @@ export const BingoGame: React.FC<BingoGameProps> = ({
   timeLimit,
   winCondition = 'line',
   sessionId,
-  participantId
+  participantId,
+  reactions
 }) => {
   const [bingoCard, setBingoCard] = useState<CellState[][]>([])
   const [markedCells, setMarkedCells] = useState<Set<string>>(new Set())
@@ -103,6 +108,20 @@ export const BingoGame: React.FC<BingoGameProps> = ({
   const [timeRemaining, setTimeRemaining] = useState(timeLimit || 0)
   const [lastMarkedCell, setLastMarkedCell] = useState<{row: number, col: number} | null>(null)
   const [celebrationMessage, setCelebrationMessage] = useState('')
+
+  // Challenge question state
+  const [challengeCell, setChallengeCell] = useState<{ row: number, col: number } | null>(null)
+  const [challengeResult, setChallengeResult] = useState<'correct' | 'incorrect' | null>(null)
+
+  // Map bingo item IDs to full quiz questions for verification challenges
+  const questionMap = useMemo(() => {
+    const map = new Map<string, Question>()
+    if (questions) {
+      questions.forEach(q => map.set(q.id, q))
+    }
+    return map
+  }, [questions])
+  const hasQuestions = questionMap.size > 0
 
   const scoreCounterRef = useRef<HTMLDivElement>(null)
   const cardContainerRef = useRef<HTMLDivElement>(null)
@@ -395,6 +414,61 @@ export const BingoGame: React.FC<BingoGameProps> = ({
     }, 2000)
   }, [sessionId, participantId, score, streak, markedCells, totalCells, gameWon, winCondition])
 
+  // Core marking logic — called directly (no quiz) or after correct challenge answer
+  const markCell = useCallback((row: number, col: number) => {
+    const cellKey = `${row}-${col}`
+    const cell = bingoCard[row]?.[col]
+    if (!cell) return
+
+    const newMarkedCells = new Set(markedCells)
+    newMarkedCells.add(cellKey)
+
+    const newStreak = streak + 1
+    setStreak(newStreak)
+    if (newStreak > maxStreakRef.current) {
+      maxStreakRef.current = newStreak
+    }
+
+    const pointsEarned = cell.item?.points || 10
+    setScore(prev => {
+      const newScore = prev + pointsEarned
+      if (scoreCounterRef.current) {
+        animateScoreCounter(scoreCounterRef.current, prev, newScore)
+      }
+      return newScore
+    })
+    setLastMarkedCell({ row, col })
+
+    playSound('correct')
+    const cellElement = cellRefs.current[row]?.[col]
+    if (cellElement) {
+      applyEffect(cellElement, 'correct-pulse')
+      if (newStreak >= 5) {
+        applyEffect(cellElement, 'streak-fire')
+      }
+    }
+    if (newStreak >= 5) {
+      triggerScreenEffect('screen-flash', { color: colors.success })
+    }
+
+    setMarkedCells(newMarkedCells)
+
+    const updatedCard = bingoCard.map(cardRow =>
+      cardRow.map(cardCell => ({
+        ...cardCell,
+        marked: cardCell.row === row && cardCell.col === col
+          ? true
+          : newMarkedCells.has(`${cardCell.row}-${cardCell.col}`)
+      }))
+    )
+    setBingoCard(updatedCard)
+
+    setTimeout(() => {
+      persistGameState()
+      saveRecoveryData()
+    }, 0)
+  }, [bingoCard, markedCells, streak, playSound, applyEffect, triggerScreenEffect, colors.success, animateScoreCounter, persistGameState, saveRecoveryData])
+
   const toggleCell = (row: number, col: number) => {
     if (gameComplete || !bingoCard[row] || !bingoCard[row][col]) return
 
@@ -404,75 +478,70 @@ export const BingoGame: React.FC<BingoGameProps> = ({
     // Can't unmark free space
     if (cell.item?.category === 'free') return
 
-    const newMarkedCells = new Set(markedCells)
-    const cellElement = cellRefs.current[row]?.[col]
-
-    if (newMarkedCells.has(cellKey)) {
-      // Unmarking cell
+    if (markedCells.has(cellKey)) {
+      // Unmarking cell — no question needed
+      const newMarkedCells = new Set(markedCells)
       newMarkedCells.delete(cellKey)
       setStreak(0)
 
+      const cellElement = cellRefs.current[row]?.[col]
       if (cellElement) {
         applyEffect(cellElement, 'wrong-shake')
       }
+
+      setMarkedCells(newMarkedCells)
+
+      const updatedCard = bingoCard.map(cardRow =>
+        cardRow.map(cardCell => ({
+          ...cardCell,
+          marked: cardCell.row === row && cardCell.col === col
+            ? false
+            : newMarkedCells.has(`${cardCell.row}-${cardCell.col}`)
+        }))
+      )
+      setBingoCard(updatedCard)
+
+      setTimeout(() => {
+        persistGameState()
+        saveRecoveryData()
+      }, 0)
     } else {
-      // Marking cell
-      newMarkedCells.add(cellKey)
-      const newStreak = streak + 1
-      setStreak(newStreak)
-
-      // Track best streak (only increases)
-      if (newStreak > maxStreakRef.current) {
-        maxStreakRef.current = newStreak
-      }
-
-      const pointsEarned = cell.item?.points || 10
-      setScore(prev => {
-        const newScore = prev + pointsEarned
-        if (scoreCounterRef.current) {
-          animateScoreCounter(scoreCounterRef.current, prev, newScore)
-        }
-        return newScore
-      })
-      setLastMarkedCell({ row, col })
-
-      // Play marking sound (phone only gets correct feedback)
-      playSound('correct')
-
-      if (cellElement) {
-        applyEffect(cellElement, 'correct-pulse')
-        if (newStreak >= 5) {
-          applyEffect(cellElement, 'streak-fire')
-        }
-      }
-
-      // Screen effects for streaks
-      if (newStreak >= 5) {
-        triggerScreenEffect('screen-flash', { color: colors.success })
+      // Marking cell — show challenge question if available
+      const question = cell.item ? questionMap.get(cell.item.id) : undefined
+      if (question) {
+        setChallengeCell({ row, col })
+        setChallengeResult(null)
+      } else {
+        // No quiz question — mark directly (fallback for default items)
+        markCell(row, col)
       }
     }
-
-    setMarkedCells(newMarkedCells)
-
-    // Update the card state
-    const updatedCard = bingoCard.map(cardRow =>
-      cardRow.map(cardCell => ({
-        ...cardCell,
-        marked: cardCell.row === row && cardCell.col === col
-          ? newMarkedCells.has(cellKey)
-          : newMarkedCells.has(`${cardCell.row}-${cardCell.col}`)
-      }))
-    )
-
-    setBingoCard(updatedCard)
-
-    // Persist to Firestore and localStorage (debounced)
-    // Use setTimeout to ensure state is committed
-    setTimeout(() => {
-      persistGameState()
-      saveRecoveryData()
-    }, 0)
   }
+
+  const handleChallengeAnswer = useCallback((selectedIndex: number) => {
+    if (!challengeCell) return
+    const cell = bingoCard[challengeCell.row]?.[challengeCell.col]
+    if (!cell?.item) return
+
+    const question = questionMap.get(cell.item.id)
+    if (!question) return
+
+    if (selectedIndex === question.correctAnswer) {
+      setChallengeResult('correct')
+      setTimeout(() => {
+        markCell(challengeCell.row, challengeCell.col)
+        setChallengeCell(null)
+        setChallengeResult(null)
+      }, 800)
+    } else {
+      setChallengeResult('incorrect')
+      playSound('incorrect')
+      setTimeout(() => {
+        setChallengeCell(null)
+        setChallengeResult(null)
+      }, 1000)
+    }
+  }, [challengeCell, bingoCard, questionMap, markCell, playSound])
 
   const checkForWins = () => {
     if (gameComplete) return
@@ -919,7 +988,9 @@ export const BingoGame: React.FC<BingoGameProps> = ({
           {/* Instructions */}
           <div className="mt-6 text-center">
             <p className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
-              Tap the squares as you complete each training activity.
+              {hasQuestions
+                ? 'Tap a square and answer the question correctly to mark it.'
+                : 'Tap the squares as you complete each training activity.'}
               {winCondition === 'line' && " Get a line to win!"}
               {winCondition === 'full_card' && " Mark all squares to win!"}
               {winCondition === 'corners' && " Mark all four corners to win!"}
@@ -939,6 +1010,90 @@ export const BingoGame: React.FC<BingoGameProps> = ({
           </div>
         )}
       </div>
+
+      {/* Challenge Question Modal */}
+      {challengeCell && (() => {
+        const cell = bingoCard[challengeCell.row]?.[challengeCell.col]
+        const question = cell?.item ? questionMap.get(cell.item.id) : undefined
+        if (!question) return null
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+            <div className="w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+              style={{ backgroundColor: 'var(--surface-color, #1e293b)' }}>
+              {/* Header */}
+              <div className="px-5 py-4 flex items-center justify-between"
+                style={{ backgroundColor: 'var(--primary-color)' }}>
+                <span className="text-sm font-medium"
+                  style={{ color: 'var(--text-on-primary-color, white)' }}>
+                  Answer to mark this square
+                </span>
+                <button onClick={() => { setChallengeCell(null); setChallengeResult(null) }}
+                  className="p-1 rounded-full hover:opacity-80"
+                  style={{ color: 'var(--text-on-primary-color, white)' }}>
+                  <X size={20} />
+                </button>
+              </div>
+              {/* Question */}
+              <div className="px-5 py-4">
+                <p className="text-lg font-semibold mb-4" style={{ color: 'var(--text-color, white)' }}>
+                  {question.questionText}
+                </p>
+                {/* Options */}
+                <div className="space-y-3">
+                  {question.options.map((option, idx) => {
+                    const isCorrectReveal = challengeResult === 'correct' && idx === question.correctAnswer
+                    const isWrongReveal = challengeResult === 'incorrect' && idx === question.correctAnswer
+                    const isSelected = challengeResult === 'incorrect' && idx !== question.correctAnswer
+
+                    let optionBg = 'var(--primary-light-color, rgba(59,130,246,0.15))'
+                    let optionBorder = 'transparent'
+                    if (isCorrectReveal || isWrongReveal) {
+                      optionBg = 'rgba(34,197,94,0.2)'
+                      optionBorder = 'var(--success-color, #22c55e)'
+                    } else if (isSelected) {
+                      // Don't highlight wrong selections — only show the correct one
+                      optionBg = 'var(--primary-light-color, rgba(59,130,246,0.15))'
+                    }
+
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => !challengeResult && handleChallengeAnswer(idx)}
+                        disabled={!!challengeResult}
+                        className="w-full text-left px-4 py-3 rounded-xl transition-all duration-200 border-2"
+                        style={{
+                          backgroundColor: optionBg,
+                          borderColor: optionBorder,
+                          color: 'var(--text-color, white)',
+                          opacity: challengeResult ? 0.8 : 1
+                        }}
+                      >
+                        <span className="font-medium mr-2" style={{ color: 'var(--primary-color)' }}>
+                          {String.fromCharCode(65 + idx)}.
+                        </span>
+                        {option}
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* Feedback */}
+                {challengeResult && (
+                  <div className="mt-4 text-center py-2 rounded-lg font-bold text-lg"
+                    style={{
+                      backgroundColor: challengeResult === 'correct'
+                        ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
+                      color: challengeResult === 'correct'
+                        ? 'var(--success-color, #22c55e)' : 'var(--error-color, #ef4444)'
+                    }}>
+                    {challengeResult === 'correct' ? 'Correct!' : 'Incorrect — try again later'}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Live Engagement Component */}
       <LiveEngagement

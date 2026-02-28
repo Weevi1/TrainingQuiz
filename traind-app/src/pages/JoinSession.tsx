@@ -3,7 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Users, Play, Clock, AlertCircle, CheckCircle, QrCode, UserPlus, Volume2, Award } from 'lucide-react'
 import { FirestoreService, type GameSession, type Organization } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
-
+import { AvatarDisplay } from '../components/AvatarDisplay'
+import { StickerPicker } from '../components/StickerPicker'
+import { BUILT_IN_STICKERS } from '../lib/builtInStickers'
 import { applyOrganizationBranding } from '../lib/applyBranding'
 
 interface Participant {
@@ -31,9 +33,6 @@ export const JoinSession: React.FC = () => {
   const [selectedAvatar, setSelectedAvatar] = useState('😀')
   const previousParticipantCountRef = useRef(0)
 
-  // Avatar options
-  const AVATAR_OPTIONS = ['😀', '😎', '🤓', '🦊', '🐱', '🐼', '🦁', '🐸', '🦄', '🌟', '🚀', '💪']
-
   // Auto-search for session when code is provided in URL
   useEffect(() => {
     if (sessionCode) {
@@ -53,7 +52,7 @@ export const JoinSession: React.FC = () => {
           name: p.name,
           joinedAt: p.joinedAt,
           isReady: p.isReady,
-          avatar: (p as any).avatar || '😀'
+          avatar: p.avatar || '😀'
         }))
 
         // Check if a new participant joined
@@ -123,7 +122,7 @@ export const JoinSession: React.FC = () => {
         name: p.name,
         joinedAt: p.joinedAt,
         isReady: p.isReady,
-        avatar: (p as any).avatar || '😀'
+        avatar: p.avatar || '😀'
       }))
       setParticipants(mappedParticipants)
       previousParticipantCountRef.current = mappedParticipants.length
@@ -283,12 +282,17 @@ export const JoinSession: React.FC = () => {
       <header style={{ backgroundColor: 'var(--surface-color)', borderBottom: '1px solid var(--border-color)' }}>
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-center items-center h-16">
-            {organization?.branding?.logoUrl ? (
+            {organization?.branding?.logo ? (
               <img
-                src={organization.branding.logoUrl}
+                src={organization.branding.logo}
                 alt={organization.name}
                 className="h-10 object-contain"
+                style={{ borderRadius: 'var(--logo-border-radius, 0)' }}
               />
+            ) : organization?.name ? (
+              <h1 className="text-xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                {organization.name}
+              </h1>
             ) : (
               <h1 className="text-xl font-bold" style={{ color: 'var(--primary-color)' }}>
                 Join Training Session
@@ -317,8 +321,8 @@ export const JoinSession: React.FC = () => {
                   value={inputCode}
                   onChange={(e) => setInputCode(e.target.value.toUpperCase())}
                   className="input text-center text-2xl font-mono tracking-widest"
-                  placeholder="ABC123"
-                  maxLength={6}
+                  placeholder="A7"
+                  maxLength={2}
                   autoComplete="off"
                 />
               </div>
@@ -332,7 +336,7 @@ export const JoinSession: React.FC = () => {
 
               <button
                 onClick={() => findSession(inputCode)}
-                disabled={inputCode.length !== 6}
+                disabled={inputCode.length !== 2}
                 className="btn-primary w-full"
               >
                 Find Session
@@ -410,37 +414,12 @@ export const JoinSession: React.FC = () => {
                 </div>
 
                 {/* Avatar Selection */}
-                <div>
-                  <label className="block text-base font-medium mb-2">
-                    Choose Your Avatar
-                  </label>
-                  <div className="grid grid-cols-6 gap-3">
-                    {AVATAR_OPTIONS.map((avatar) => (
-                      <button
-                        key={avatar}
-                        onClick={() => {
-                          setSelectedAvatar(avatar)
-                        }}
-                        className={`w-12 h-12 text-2xl rounded-lg transition-all ${
-                          selectedAvatar === avatar ? 'ring-2 ring-offset-2 scale-110' : 'hover:scale-105'
-                        }`}
-                        style={{
-                          backgroundColor: selectedAvatar === avatar
-                            ? 'var(--primary-light-color)'
-                            : 'var(--surface-color)',
-                          ringColor: 'var(--primary-color)',
-                          border: '1px solid',
-                          borderColor: selectedAvatar === avatar
-                            ? 'var(--primary-color)'
-                            : 'var(--border-color)'
-                        }}
-                        type="button"
-                      >
-                        {avatar}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <StickerPicker
+                  stickers={[...(organization?.branding?.stickers || []), ...BUILT_IN_STICKERS]}
+                  selectedAvatar={selectedAvatar}
+                  onSelect={setSelectedAvatar}
+                  participantName={participantName}
+                />
 
                 {/* Volume tip */}
                 <div
@@ -504,7 +483,7 @@ export const JoinSession: React.FC = () => {
                       }}
                     >
                       <div className="flex items-center space-x-3">
-                        <span className="text-xl">{participant.avatar || '😀'}</span>
+                        <AvatarDisplay avatar={participant.avatar} size="sm" />
                         <div
                           className="w-2 h-2 rounded-full animate-pulse"
                           style={{ backgroundColor: participant.isReady ? 'var(--success-color)' : 'var(--warning-color)' }}
