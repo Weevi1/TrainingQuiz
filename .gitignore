@@ -37,3 +37,11 @@ service-account.json
 *.json.backup
 .env
 traind-app/.env
+.claude/
+.env.*
+*-adminsdk-*.json
+serviceAccountKey.json
+*.p8
+*.pem
+*.key
+credentials*.json
