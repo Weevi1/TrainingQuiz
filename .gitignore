@@ -31,4 +31,12 @@ npm-debug.log*
 .vercel/
 
 # Netlify
-.netlify/
+.netlify/.claude/
+.env.*
+*-adminsdk-*.json
+serviceAccountKey.json
+*.p8
+*.pem
+*.key
+credentials*.json
+service-account.json
