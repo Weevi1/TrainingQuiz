@@ -14,14 +14,14 @@ export const PLAN_PRICING = {
     limits: {
       maxParticipants: 50,
       maxSessions: 10,
-      maxTrainers: 3
+      maxTrainers: 10
     },
     features: [
       'Interactive Quiz Module',
       'Training Bingo',
       'Up to 50 participants per session',
       '10 active sessions',
-      '3 trainer accounts',
+      '10 trainer accounts',
       'Basic analytics',
       'Email support'
     ]

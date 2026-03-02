@@ -39,7 +39,7 @@ export const SUBSCRIPTION_PLANS = {
     limits: {
       maxParticipants: 50,
       maxSessions: 10,
-      maxTrainers: 3
+      maxTrainers: 10
     }
   },
   professional: {

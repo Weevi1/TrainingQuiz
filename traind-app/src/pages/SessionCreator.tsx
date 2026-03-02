@@ -42,6 +42,7 @@ export const SessionCreator: React.FC = () => {
   const [selectedQuizId, setSelectedQuizId] = useState<string>('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [currentSessionCount, setCurrentSessionCount] = useState(0)
 
   // Check permissions
   useEffect(() => {
@@ -59,6 +60,15 @@ export const SessionCreator: React.FC = () => {
       return
     }
   }, [session.gameType, hasModuleAccess, navigate])
+
+  // Load active session count for quota enforcement
+  useEffect(() => {
+    if (currentOrganization) {
+      FirestoreService.getActiveSessionCount(currentOrganization.id)
+        .then(count => setCurrentSessionCount(count))
+        .catch(() => setCurrentSessionCount(0))
+    }
+  }, [currentOrganization])
 
   // Load quizzes if gameType is quiz
   useEffect(() => {
@@ -141,7 +151,7 @@ export const SessionCreator: React.FC = () => {
       const validation = PermissionService.validateSessionCreation(
         currentOrganization,
         session.gameType,
-        0, // Current session count - would need to fetch this
+        currentSessionCount,
         session.participantLimit || 0
       )
 

@@ -19,6 +19,7 @@ import {
   ChevronDown
 } from 'lucide-react'
 import { OrgLogo } from '../components/OrgLogo'
+import { PermissionService } from '../lib/permissions'
 
 type SettingsTab = 'team' | 'organization' | 'billing'
 
@@ -170,6 +171,18 @@ const TeamSettings: React.FC = () => {
     if (pendingInvites.some(inv => inv.email === normalizedEmail)) {
       setError('An invitation for this email is already pending.')
       setTimeout(() => setError(null), 4000)
+      return
+    }
+
+    // Check trainer limit
+    const trainerCheck = PermissionService.checkSubscriptionLimit(
+      currentOrganization,
+      'maxTrainers',
+      teamMembers.length
+    )
+    if (!trainerCheck.allowed) {
+      setError(`Trainer limit reached (${teamMembers.length}/${trainerCheck.limit}). Upgrade your plan to add more team members.`)
+      setTimeout(() => setError(null), 6000)
       return
     }
 

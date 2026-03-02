@@ -58,6 +58,14 @@ export type Invitation = {
   acceptedByUserId?: string
 }
 
+export type PlatformSettings = {
+  defaultPlan: 'basic' | 'professional' | 'enterprise'
+  trialDurationDays: number
+  maxOrganizations: number
+  maintenanceMode: boolean
+  updatedAt?: Date
+}
+
 // Import theme types
 import type {
   ThemePresetId,
@@ -509,6 +517,16 @@ export class FirestoreService {
   }
 
   // Organization-scoped queries
+  static async getActiveSessionCount(orgId: string): Promise<number> {
+    const activeQuery = query(
+      getSessionCollection(),
+      where('organizationId', '==', orgId),
+      where('status', 'in', ['waiting', 'countdown', 'active'])
+    )
+    const snapshot = await getDocs(activeQuery)
+    return snapshot.size
+  }
+
   static async getOrganizationSessions(orgId: string): Promise<GameSession[]> {
     const sessionsQuery = query(
       getSessionCollection(),
@@ -926,6 +944,55 @@ export class FirestoreService {
       createdAt: doc.data().createdAt?.toDate(),
       updatedAt: doc.data().updatedAt?.toDate()
     })) as User[]
+  }
+
+  static async updateMemberRole(orgId: string, userId: string, role: 'ORG_OWNER' | 'ORG_ADMIN' | 'TRAINER'): Promise<void> {
+    const userDoc = getOrgUserDoc(orgId, userId)
+    await updateDoc(userDoc, {
+      [`organizations.${orgId}.role`]: role,
+      updatedAt: serverTimestamp()
+    })
+  }
+
+  static async updateMemberDetails(orgId: string, userId: string, updates: { displayName?: string; email?: string }): Promise<void> {
+    await updateDoc(getOrgUserDoc(orgId, userId), {
+      ...updates,
+      updatedAt: serverTimestamp()
+    })
+  }
+
+  static async addMemberToOrg(orgId: string, userData: { email: string; displayName: string; role: 'ORG_OWNER' | 'ORG_ADMIN' | 'TRAINER' }, organizationName?: string): Promise<string> {
+    // Write to direct-adds subcollection — Cloud Function picks this up,
+    // creates Firebase Auth account, writes user doc, and sends welcome email
+    const directAddRef = await addDoc(
+      collection(db, getCollectionName('organizations'), orgId, 'direct-adds'),
+      {
+        email: userData.email,
+        displayName: userData.displayName,
+        role: userData.role,
+        organizationName: organizationName || '',
+        status: 'pending',
+        createdAt: serverTimestamp()
+      }
+    )
+    return directAddRef.id
+  }
+
+  static async removeMember(orgId: string, userId: string): Promise<void> {
+    await deleteDoc(getOrgUserDoc(orgId, userId))
+  }
+
+  // Platform settings
+  static async getPlatformSettings(): Promise<Record<string, any>> {
+    const settingsDoc = await getDoc(doc(db, 'platform', 'settings'))
+    return settingsDoc.exists() ? settingsDoc.data() : {}
+  }
+
+  static async updatePlatformSettings(settings: Record<string, any>): Promise<void> {
+    await setDoc(doc(db, 'platform', 'settings'), {
+      ...settings,
+      updatedAt: serverTimestamp()
+    }, { merge: true })
   }
 
   // Utility functions
