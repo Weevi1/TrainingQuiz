@@ -16,10 +16,15 @@ import {
   X,
   UserMinus,
   Shield,
-  ChevronDown
+  ChevronDown,
+  Upload,
+  Trash2,
+  PenTool
 } from 'lucide-react'
 import { OrgLogo } from '../components/OrgLogo'
 import { PermissionService } from '../lib/permissions'
+import { StorageService } from '../lib/storageService'
+import { resizeSignature } from '../lib/imageResize'
 
 type SettingsTab = 'team' | 'organization' | 'billing'
 
@@ -47,7 +52,7 @@ export const Settings: React.FC = () => {
       {/* Header */}
       <header style={{ backgroundColor: 'var(--surface-color)', borderBottom: '1px solid var(--border-color)' }}>
         <div className="max-w-6xl mx-auto px-6">
-          <div className="flex items-center h-16">
+          <div className="flex items-center h-20">
             <button
               onClick={() => navigate('/dashboard')}
               className="p-2 mr-3 rounded-md transition-colors"
@@ -58,7 +63,7 @@ export const Settings: React.FC = () => {
             <OrgLogo
               logo={currentOrganization?.branding?.logo}
               orgName={currentOrganization?.name}
-              size="sm"
+              size="md"
             />
             <h1 className="text-lg font-semibold ml-3" style={{ color: 'var(--text-color)' }}>
               Settings
@@ -465,6 +470,21 @@ const OrganizationSettings: React.FC = () => {
   )
   const [saving, setSaving] = useState(false)
 
+  // Certificate signer fields
+  const [signerName, setSignerName] = useState(currentOrganization?.branding?.signerName || '')
+  const [signerTitle, setSignerTitle] = useState(currentOrganization?.branding?.signerTitle || '')
+  const [signatureUrl, setSignatureUrl] = useState<string | undefined>(currentOrganization?.branding?.signatureUrl || undefined)
+  const [uploadingSignature, setUploadingSignature] = useState(false)
+  const [removingSignature, setRemovingSignature] = useState(false)
+  const [savingSignerInfo, setSavingSignerInfo] = useState(false)
+  const [certMessage, setCertMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const signatureInputRef = React.useRef<HTMLInputElement>(null)
+
+  // Certificate template fields
+  const [certTemplate, setCertTemplate] = useState<string>(currentOrganization?.branding?.certificateTemplate || 'elegant')
+  const [companyDescriptor, setCompanyDescriptor] = useState(currentOrganization?.branding?.companyDescriptor || '')
+  const [websiteUrl, setWebsiteUrl] = useState(currentOrganization?.branding?.websiteUrl || '')
+
   const handleSave = async () => {
     if (!currentOrganization) return
 
@@ -483,6 +503,69 @@ const OrganizationSettings: React.FC = () => {
       alert('Failed to save settings. Please try again.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleSignatureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !currentOrganization) return
+
+    setCertMessage(null)
+    setUploadingSignature(true)
+    try {
+      const optimized = await resizeSignature(file)
+      const url = await StorageService.uploadSignature(currentOrganization.id, optimized)
+      await FirestoreService.updateOrganization(currentOrganization.id, {
+        'branding.signatureUrl': url
+      } as any)
+      setSignatureUrl(url)
+      setCertMessage({ type: 'success', text: 'Signature uploaded successfully!' })
+      setTimeout(() => setCertMessage(null), 4000)
+    } catch (err: any) {
+      setCertMessage({ type: 'error', text: err.message || 'Failed to upload signature' })
+    } finally {
+      setUploadingSignature(false)
+      if (signatureInputRef.current) signatureInputRef.current.value = ''
+    }
+  }
+
+  const handleSignatureRemove = async () => {
+    if (!currentOrganization) return
+    setCertMessage(null)
+    setRemovingSignature(true)
+    try {
+      await StorageService.deleteSignature(currentOrganization.id)
+      await FirestoreService.updateOrganization(currentOrganization.id, {
+        'branding.signatureUrl': ''
+      } as any)
+      setSignatureUrl(undefined)
+      setCertMessage({ type: 'success', text: 'Signature removed.' })
+      setTimeout(() => setCertMessage(null), 4000)
+    } catch (err: any) {
+      setCertMessage({ type: 'error', text: err.message || 'Failed to remove signature' })
+    } finally {
+      setRemovingSignature(false)
+    }
+  }
+
+  const handleSaveSignerInfo = async () => {
+    if (!currentOrganization) return
+    setCertMessage(null)
+    setSavingSignerInfo(true)
+    try {
+      await FirestoreService.updateOrganization(currentOrganization.id, {
+        'branding.signerName': signerName.trim(),
+        'branding.signerTitle': signerTitle.trim(),
+        'branding.certificateTemplate': certTemplate,
+        'branding.companyDescriptor': companyDescriptor.trim(),
+        'branding.websiteUrl': websiteUrl.trim(),
+      } as any)
+      setCertMessage({ type: 'success', text: 'Certificate configuration saved.' })
+      setTimeout(() => setCertMessage(null), 4000)
+    } catch (err: any) {
+      setCertMessage({ type: 'error', text: err.message || 'Failed to save certificate configuration' })
+    } finally {
+      setSavingSignerInfo(false)
     }
   }
 
@@ -571,6 +654,247 @@ const OrganizationSettings: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Certificate Configuration — shown when attendance certificates are enabled */}
+      {enableAttendanceCerts && (
+        <div
+          className="p-6 rounded-xl mt-6"
+          style={{ backgroundColor: 'var(--surface-color)', border: '1px solid var(--border-color)' }}
+        >
+          <div className="flex items-center space-x-2 mb-4">
+            <PenTool size={18} style={{ color: 'var(--primary-color)' }} />
+            <h3 className="font-medium" style={{ color: 'var(--text-color)' }}>
+              Certificate Configuration
+            </h3>
+          </div>
+          <p className="text-sm mb-4" style={{ color: 'var(--text-secondary-color)' }}>
+            Choose a certificate template and configure the details that will appear on attendance certificates.
+          </p>
+
+          {/* Template Selector */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-color)' }}>
+              Certificate Template
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {[
+                { id: 'elegant', name: 'Elegant', desc: 'Centered layout with decorative borders and dividers' },
+                { id: 'cpd-professional', name: 'CPD Professional', desc: 'Form-field style for legal/professional CPD compliance' },
+                { id: 'minimal', name: 'Minimal', desc: 'Clean modern layout (coming soon)' },
+              ].map(t => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setCertTemplate(t.id)}
+                  className="p-4 rounded-lg text-left transition-all"
+                  style={{
+                    backgroundColor: certTemplate === t.id ? 'var(--primary-color)' : 'var(--background-color)',
+                    border: `2px solid ${certTemplate === t.id ? 'var(--primary-color)' : 'var(--border-color)'}`,
+                    color: certTemplate === t.id ? 'var(--text-on-primary-color)' : 'var(--text-color)',
+                    opacity: t.id === 'minimal' ? 0.6 : 1,
+                  }}
+                >
+                  <span className="font-semibold text-sm block">{t.name}</span>
+                  <span className="text-xs mt-1 block" style={{
+                    color: certTemplate === t.id ? 'var(--text-on-primary-color)' : 'var(--text-secondary-color)',
+                    opacity: certTemplate === t.id ? 0.85 : 1,
+                  }}>{t.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Company Descriptor — subtitle under org name on cpd-professional certs */}
+          {certTemplate === 'cpd-professional' && (
+            <>
+              <div className="mb-6">
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-color)' }}>
+                  Company Descriptor
+                </label>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary-color)' }}>
+                  Subtitle under org name on certificates (e.g. "Attorneys Notaries Conveyancers"). Only shown when no logo is uploaded.
+                </p>
+                <input
+                  type="text"
+                  value={companyDescriptor}
+                  onChange={(e) => setCompanyDescriptor(e.target.value)}
+                  placeholder="e.g. Attorneys Notaries Conveyancers"
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                  style={{
+                    backgroundColor: 'var(--background-color)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-color)',
+                  }}
+                />
+              </div>
+              <div className="mb-6">
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-color)' }}>
+                  Website URL
+                </label>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary-color)' }}>
+                  Shown in the bottom-right footer of CPD Professional certificates.
+                </p>
+                <input
+                  type="text"
+                  value={websiteUrl}
+                  onChange={(e) => setWebsiteUrl(e.target.value)}
+                  placeholder="e.g. www.abgross.co.za"
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                  style={{
+                    backgroundColor: 'var(--background-color)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-color)',
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {certMessage && (
+            <div
+              className="px-4 py-2 rounded-lg text-sm mb-4"
+              style={{
+                backgroundColor: certMessage.type === 'success' ? 'var(--success-light-color)' : 'var(--error-light-color)',
+                color: certMessage.type === 'success' ? 'var(--success-color)' : 'var(--error-color)',
+              }}
+            >
+              {certMessage.text}
+            </div>
+          )}
+
+          {/* Signature Image Upload */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-color)' }}>
+              Signature Image
+            </label>
+            <p className="text-sm mb-3" style={{ color: 'var(--text-secondary-color)' }}>
+              Upload a signature image (PNG, JPG, or WebP, max 2MB) to appear on certificates above the signature line.
+            </p>
+
+            <input
+              ref={signatureInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleSignatureUpload}
+              className="hidden"
+            />
+
+            {signatureUrl ? (
+              <div className="space-y-3">
+                <div
+                  className="p-4 rounded-lg flex items-center justify-center"
+                  style={{ backgroundColor: 'var(--background-color)', border: '1px solid var(--border-color)' }}
+                >
+                  <img
+                    src={signatureUrl}
+                    alt="Signature preview"
+                    className="max-h-20 object-contain"
+                  />
+                </div>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => signatureInputRef.current?.click()}
+                    disabled={uploadingSignature}
+                    className="px-4 py-2 rounded-lg font-medium text-sm flex items-center space-x-2"
+                    style={{
+                      backgroundColor: 'var(--primary-color)',
+                      color: 'var(--text-on-primary-color)',
+                      opacity: uploadingSignature ? 0.7 : 1
+                    }}
+                  >
+                    {uploadingSignature ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                    <span>{uploadingSignature ? 'Uploading...' : 'Replace'}</span>
+                  </button>
+                  <button
+                    onClick={handleSignatureRemove}
+                    disabled={removingSignature}
+                    className="px-4 py-2 rounded-lg font-medium text-sm flex items-center space-x-2"
+                    style={{
+                      backgroundColor: 'var(--background-color)',
+                      border: '1px solid var(--border-color)',
+                      color: 'var(--error-color)',
+                      opacity: removingSignature ? 0.7 : 1
+                    }}
+                  >
+                    {removingSignature ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    <span>{removingSignature ? 'Removing...' : 'Remove'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => signatureInputRef.current?.click()}
+                disabled={uploadingSignature}
+                className="w-full p-6 rounded-lg border-2 border-dashed flex flex-col items-center space-y-2"
+                style={{
+                  borderColor: 'var(--border-color)',
+                  color: 'var(--text-secondary-color)',
+                  opacity: uploadingSignature ? 0.7 : 1
+                }}
+              >
+                {uploadingSignature ? (
+                  <Loader2 size={24} className="animate-spin" />
+                ) : (
+                  <Upload size={24} />
+                )}
+                <span className="text-sm font-medium">
+                  {uploadingSignature ? 'Uploading...' : 'Click to upload signature image'}
+                </span>
+              </button>
+            )}
+          </div>
+
+          {/* Signer Name & Title */}
+          <div className="space-y-4 pt-4" style={{ borderTop: '1px solid var(--border-color)' }}>
+            <div>
+              <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-color)' }}>
+                Trainer / Signer Name
+              </label>
+              <input
+                type="text"
+                value={signerName}
+                onChange={(e) => setSignerName(e.target.value)}
+                placeholder="e.g. John Smith"
+                className="w-full px-3 py-2 rounded-lg text-sm"
+                style={{
+                  backgroundColor: 'var(--background-color)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-color)',
+                }}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-color)' }}>
+                Title / Position <span style={{ color: 'var(--text-secondary-color)' }}>(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={signerTitle}
+                onChange={(e) => setSignerTitle(e.target.value)}
+                placeholder="e.g. Training Manager"
+                className="w-full px-3 py-2 rounded-lg text-sm"
+                style={{
+                  backgroundColor: 'var(--background-color)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-color)',
+                }}
+              />
+            </div>
+            <button
+              onClick={handleSaveSignerInfo}
+              disabled={savingSignerInfo}
+              className="px-4 py-2 rounded-lg font-medium text-sm"
+              style={{
+                backgroundColor: 'var(--primary-color)',
+                color: 'var(--text-on-primary-color)',
+                opacity: savingSignerInfo ? 0.7 : 1,
+              }}
+            >
+              {savingSignerInfo ? 'Saving...' : 'Save Certificate Configuration'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

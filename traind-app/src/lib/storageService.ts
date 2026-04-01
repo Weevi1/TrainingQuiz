@@ -143,4 +143,48 @@ export class StorageService {
       return deleteObject(ref(storage, path)).catch(() => {})
     }))
   }
+
+  // --- Slide media uploads (images or videos for interstitial slides) ---
+
+  static async uploadSlideMedia(orgId: string, slideId: string, file: File): Promise<string> {
+    if (file.size > 10 * 1024 * 1024) throw new Error('File must be under 10MB')
+    const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4')
+    const ext = isVideo ? 'mp4' : (file.name.split('.').pop()?.toLowerCase() || 'png')
+    const storageRef = ref(storage, `organizations/${orgId}/media/slides/${slideId}.${ext}`)
+    await uploadBytes(storageRef, file, { contentType: file.type })
+    return getDownloadURL(storageRef)
+  }
+
+  static async uploadSlideAudio(orgId: string, slideId: string, file: File): Promise<string> {
+    if (file.size > 15 * 1024 * 1024) throw new Error('Audio file must be under 15MB')
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'mp3'
+    const storageRef = ref(storage, `organizations/${orgId}/media/slides/${slideId}_audio.${ext}`)
+    await uploadBytes(storageRef, file, { contentType: file.type })
+    return getDownloadURL(storageRef)
+  }
+
+  static async deleteSlideAudio(orgId: string, slideId: string): Promise<void> {
+    const extensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac']
+    await Promise.all(extensions.map(ext =>
+      deleteObject(ref(storage, `organizations/${orgId}/media/slides/${slideId}_audio.${ext}`)).catch(() => {})
+    ))
+  }
+
+  static async deleteSlideMedia(orgId: string, slideId: string): Promise<void> {
+    const extensions = ['mp4', 'png', 'jpg', 'jpeg', 'webp', 'gif']
+    await Promise.all(extensions.map(ext =>
+      deleteObject(ref(storage, `organizations/${orgId}/media/slides/${slideId}.${ext}`)).catch(() => {})
+    ))
+  }
+
+  // --- Quiz-level custom media (feedback, milestones, boss intros) ---
+
+  /** Upload custom feedback, milestone, or boss intro media (video/audio) */
+  static async uploadQuizMedia(orgId: string, quizId: string, key: string, file: File): Promise<string> {
+    if (file.size > 15 * 1024 * 1024) throw new Error('File must be under 15MB')
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'mp4'
+    const storageRef = ref(storage, `organizations/${orgId}/media/quiz/${quizId}/${key}.${ext}`)
+    await uploadBytes(storageRef, file, { contentType: file.type })
+    return getDownloadURL(storageRef)
+  }
 }

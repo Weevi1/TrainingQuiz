@@ -195,6 +195,24 @@ service cloud.firestore {
       }
     }
 
+    // User → Org index (O(1) login lookup — doc ID is the user's UID)
+    match /userOrgIndex/{userId} {
+      allow read: if isAuthenticated() && getUserId() == userId;
+      allow create: if isAuthenticated() && getUserId() == userId;
+      allow update: if isAuthenticated() && getUserId() == userId;
+      // Platform admin can read any index (for support/debugging)
+      allow read: if isPlatformAdmin();
+      // Cloud Functions write via admin SDK (bypasses rules)
+    }
+
+    // Dev-prefixed variant for development environment
+    match /dev-userOrgIndex/{userId} {
+      allow read: if isAuthenticated() && getUserId() == userId;
+      allow create: if isAuthenticated() && getUserId() == userId;
+      allow update: if isAuthenticated() && getUserId() == userId;
+      allow read: if isPlatformAdmin();
+    }
+
     // Legacy sessions (for backward compatibility during transition)
     match /dev-sessions/{sessionId} {
       allow read: if true; // Public read for QR code joining

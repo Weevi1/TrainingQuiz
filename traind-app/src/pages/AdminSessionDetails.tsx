@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Download, FileText, Users, Calendar, HelpCircle, Trophy, Clock, ChevronDown, ChevronUp, CheckCircle, XCircle, Zap, Award } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Users, Calendar, HelpCircle, Trophy, Clock, ChevronDown, ChevronUp, CheckCircle, XCircle, Zap, Award, ClipboardList } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { OrgLogo } from '../components/OrgLogo'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { FirestoreService, type GameSession, type Quiz, type Participant } from '../lib/firestore'
-import { generateSessionPDF } from '../lib/pdfExport'
+import { generateSessionPDF, generateDetailedAnalysisPDF } from '../lib/pdfExport'
 import { calculateSessionAwards } from '../lib/awardCalculator'
+import { generateAttendanceRegisterPDF } from '../lib/attendanceRegister'
 
 export const AdminSessionDetails: React.FC = () => {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -22,6 +23,8 @@ export const AdminSessionDetails: React.FC = () => {
   const [sortField, setSortField] = useState<'rank' | 'name' | 'score' | 'time'>('rank')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [certProgress, setCertProgress] = useState<{ current: number; total: number } | null>(null)
+  const [showCertModal, setShowCertModal] = useState(false)
+  const [certSelection, setCertSelection] = useState<Set<string>>(new Set())
 
   const isBingo = session?.gameType === 'bingo'
 
@@ -44,8 +47,10 @@ export const AdminSessionDetails: React.FC = () => {
       }
       setSession(sessionData)
 
-      // Load quiz if it's a quiz-type session
-      if (sessionData.gameData?.quizId) {
+      // Load quiz: prefer session-time snapshot (immutable), fall back to live quiz (may have been edited)
+      if (sessionData.gameData?.quizSnapshot) {
+        setQuiz(sessionData.gameData.quizSnapshot as Quiz)
+      } else if (sessionData.gameData?.quizId) {
         const quizData = await FirestoreService.getQuiz(currentOrganization.id, sessionData.gameData.quizId)
         setQuiz(quizData)
       }
@@ -92,7 +97,8 @@ export const AdminSessionDetails: React.FC = () => {
         }
 
         const answers = p.gameState!.answers || []
-        const totalQuestions = quiz?.questions.length || answers.length
+        // Use totalQuestions from session-time gameState (not live quiz, which may have been edited since)
+        const totalQuestions = p.gameState!.totalQuestions || quiz?.questions.length || answers.length
         const correctCount = answers.filter(a => a.isCorrect).length
         const scorePercent = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0
         const avgTime = answers.length > 0
@@ -136,7 +142,7 @@ export const AdminSessionDetails: React.FC = () => {
           totalTime: p.totalTime || 0
         }
       })
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.score - a.score || a.avgTime - b.avgTime)
       // Assign ranks
       .map((p, idx) => ({ ...p, rank: idx + 1 }))
 
@@ -193,80 +199,101 @@ export const AdminSessionDetails: React.FC = () => {
     )
   }
 
-  const handleDownloadCSV = () => {
-    if (!session) return
-    const headers = ['Name', 'Joined At', 'Completed', 'Score %', 'Total Time (s)']
-    const rows = processedParticipants.map(p => [
-      p.name,
-      p.joinedAt ? new Date(p.joinedAt).toLocaleString('en-ZA') : 'N/A',
-      p.completed ? 'Yes' : 'No',
-      `${p.scorePercent}%`,
-      p.totalTime ? Math.round(p.totalTime).toString() : '0'
-    ])
-
-    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `Attendance-${session.code}-${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  const handleDownloadDetailedAnalysis = async () => {
+    if (!session || !quiz || !currentOrganization) return
+    await generateDetailedAnalysisPDF(
+      session,
+      quiz,
+      participants,
+      currentOrganization.name
+    )
   }
 
-  const handleDownloadCertificates = async () => {
+  const handleDownloadAttendanceRegister = async () => {
+    if (!session || !currentOrganization) return
+    await generateAttendanceRegisterPDF(
+      session,
+      processedParticipants.map(p => ({
+        name: p.name,
+        joinedAt: p.joinedAt ? new Date(p.joinedAt) : undefined,
+        completed: p.completed,
+        scorePercent: p.scorePercent,
+        totalTime: p.totalTime,
+      })),
+      currentOrganization.name,
+      currentOrganization.branding?.logo
+    )
+  }
+
+  const openCertModal = () => {
+    // Pre-select all participants
+    setCertSelection(new Set(processedParticipants.map(p => p.id)))
+    setShowCertModal(true)
+  }
+
+  const handleDownloadCertificates = async (selectedIds?: Set<string>) => {
     if (!session || !currentOrganization || processedParticipants.length === 0) return
 
-    const { generateAttendanceCertificate } = await import('../lib/attendanceCertificate')
+    const targetParticipants = selectedIds
+      ? processedParticipants.filter(p => selectedIds.has(p.id))
+      : processedParticipants
+
+    if (targetParticipants.length === 0) return
+
+    setShowCertModal(false)
+
+    const { generateMergedCertificatesPDF } = await import('../lib/attendanceCertificate')
     const branding = currentOrganization.branding
-    const total = processedParticipants.length
-    const cpd = session.gameData?.cpd as { enabled: boolean; points: number; requiresPass: boolean; passingScore: number } | undefined
-    setCertProgress({ current: 0, total })
+    // CPD settings: prefer denormalized session.gameData.cpd, fall back to embedded quiz settings
+    const sessionCpd = session.gameData?.cpd as { enabled: boolean; points: number; requiresPass: boolean; passingScore: number; verifiable?: boolean } | undefined
+    const quizSettings = session.gameData?.quiz?.settings as { cpdEnabled?: boolean; cpdPoints?: number; cpdRequiresPass?: boolean; cpdVerifiable?: boolean; passingScore?: number } | undefined
+    const cpd = sessionCpd ?? (quizSettings?.cpdEnabled ? {
+      enabled: true,
+      points: quizSettings.cpdPoints || 1,
+      requiresPass: quizSettings.cpdRequiresPass || false,
+      passingScore: quizSettings.passingScore || 60,
+      verifiable: quizSettings.cpdVerifiable || false,
+    } : undefined)
+    setCertProgress({ current: 0, total: targetParticipants.length })
 
-    for (let i = 0; i < total; i++) {
-      const p = processedParticipants[i]
-      setCertProgress({ current: i + 1, total })
-
+    const allData = targetParticipants.map(p => {
       const cpdEarned = cpd?.enabled
         ? (cpd.requiresPass ? p.scorePercent >= cpd.passingScore : true)
         : false
 
-      try {
-        const blob = await generateAttendanceCertificate({
-          participantName: p.name,
-          sessionTitle: session.title,
-          completionDate: session.endTime || session.createdAt || new Date(),
-          organizationName: currentOrganization.name,
-          organizationLogo: branding?.logo,
-          sessionCode: session.code,
-          primaryColor: branding?.primaryColor,
-          secondaryColor: branding?.secondaryColor,
-          signatureImage: branding?.signatureUrl,
-          signerName: branding?.signerName,
-          signerTitle: branding?.signerTitle,
-          ...(cpd?.enabled ? {
-            cpdPoints: cpd.points,
-            cpdRequiresPass: cpd.requiresPass,
-            cpdEarned
-          } : {}),
-        })
-
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `${p.name.replace(/\s+/g, '_')}_Attendance_Certificate.pdf`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-
-        // Small delay between downloads so the browser doesn't block them
-        if (i < total - 1) {
-          await new Promise(r => setTimeout(r, 500))
-        }
-      } catch (err) {
-        console.error(`Error generating certificate for ${p.name}:`, err)
+      return {
+        participantName: p.name,
+        sessionTitle: session.title,
+        completionDate: session.endTime || session.createdAt || new Date(),
+        organizationName: currentOrganization.name,
+        organizationLogo: branding?.logo,
+        sessionCode: session.code,
+        primaryColor: branding?.primaryColor,
+        secondaryColor: branding?.secondaryColor,
+        signatureImage: branding?.signatureUrl,
+        signerName: branding?.signerName,
+        signerTitle: branding?.signerTitle,
+        template: branding?.certificateTemplate,
+        companyDescriptor: branding?.companyDescriptor,
+        websiteUrl: branding?.websiteUrl,
+        speaker: session.speaker,
+        venue: session.venue,
+        cpdCategory: session.cpdCategory,
+        ...(cpd?.enabled ? {
+          cpdPoints: cpd.points,
+          cpdRequiresPass: cpd.requiresPass,
+          cpdVerifiable: cpd.verifiable,
+          cpdEarned
+        } : {}),
       }
+    })
+
+    try {
+      setCertProgress({ current: targetParticipants.length, total: targetParticipants.length })
+      const date = new Date().toISOString().split('T')[0]
+      await generateMergedCertificatesPDF(allData, `Certificates-${session.code}-${date}.pdf`)
+    } catch (err) {
+      console.error('Error generating merged certificates:', err)
     }
 
     setCertProgress(null)
@@ -317,7 +344,7 @@ export const AdminSessionDetails: React.FC = () => {
       {/* Header */}
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-20">
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/sessions')}
@@ -328,7 +355,7 @@ export const AdminSessionDetails: React.FC = () => {
               <OrgLogo
                 logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="sm"
+                size="md"
               />
               <h1 className="text-xl font-bold text-primary">Session Report</h1>
             </div>
@@ -340,8 +367,22 @@ export const AdminSessionDetails: React.FC = () => {
                 <Download size={16} />
                 <span className="hidden sm:inline">Download PDF</span>
               </button>
+              {session.gameType !== 'bingo' && quiz && (
+                <button
+                  onClick={handleDownloadDetailedAnalysis}
+                  className="flex items-center space-x-2 px-4 py-2 rounded-lg border transition-colors"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    color: 'var(--text-color)',
+                    backgroundColor: 'var(--surface-color)'
+                  }}
+                >
+                  <ClipboardList size={16} />
+                  <span className="hidden sm:inline">Detailed Analysis</span>
+                </button>
+              )}
               <button
-                onClick={handleDownloadCSV}
+                onClick={handleDownloadAttendanceRegister}
                 className="flex items-center space-x-2 px-4 py-2 rounded-lg border transition-colors"
                 style={{
                   borderColor: 'var(--border-color)',
@@ -350,10 +391,10 @@ export const AdminSessionDetails: React.FC = () => {
                 }}
               >
                 <FileText size={16} />
-                <span className="hidden sm:inline">Download CSV</span>
+                <span className="hidden sm:inline">Attendance Register</span>
               </button>
               <button
-                onClick={handleDownloadCertificates}
+                onClick={openCertModal}
                 disabled={certProgress !== null || processedParticipants.length === 0}
                 className="flex items-center space-x-2 px-4 py-2 rounded-lg border transition-colors disabled:opacity-50"
                 style={{
@@ -442,9 +483,9 @@ export const AdminSessionDetails: React.FC = () => {
                 {session.endTime.toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', year: 'numeric' })}
               </strong></span>
             )}
-            {session.gameData?.cpd?.enabled && (
+            {(session.gameData?.cpd?.enabled || session.gameData?.quiz?.settings?.cpdEnabled) && (
               <span>CPD: <strong style={{ color: 'var(--text-color)' }}>
-                {session.gameData.cpd.points} point{session.gameData.cpd.points !== 1 ? 's' : ''} ({session.gameData.cpd.requiresPass ? 'pass required' : 'attendance'})
+                {session.gameData?.cpd?.points || session.gameData?.quiz?.settings?.cpdPoints || 1} point{(session.gameData?.cpd?.points || session.gameData?.quiz?.settings?.cpdPoints || 1) !== 1 ? 's' : ''} ({(session.gameData?.cpd?.requiresPass || session.gameData?.quiz?.settings?.cpdRequiresPass) ? 'pass required' : 'attendance'})
               </strong></span>
             )}
           </div>
@@ -560,6 +601,104 @@ export const AdminSessionDetails: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Certificate Selection Modal */}
+      {showCertModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div
+            className="w-full max-w-md rounded-xl shadow-2xl max-h-[80vh] flex flex-col"
+            style={{ backgroundColor: 'var(--surface-color)', color: 'var(--text-color)' }}
+          >
+            {/* Header */}
+            <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-color)' }}>
+              <h3 className="text-lg font-bold">Download Certificates</h3>
+              <button
+                onClick={() => setShowCertModal(false)}
+                className="p-1 rounded-lg hover:opacity-70 text-xl leading-none"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Select/Deselect controls */}
+            <div className="px-4 pt-3 pb-2 flex items-center justify-between text-sm">
+              <span style={{ color: 'var(--text-secondary-color)' }}>
+                {certSelection.size} of {processedParticipants.length} selected
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setCertSelection(new Set(processedParticipants.map(p => p.id)))}
+                  className="px-2 py-1 rounded text-sm hover:opacity-80"
+                  style={{ color: 'var(--primary-color)' }}
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={() => setCertSelection(new Set())}
+                  className="px-2 py-1 rounded text-sm hover:opacity-80"
+                  style={{ color: 'var(--text-secondary-color)' }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Participant list */}
+            <div className="flex-1 overflow-y-auto px-4 pb-2">
+              {processedParticipants
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(p => (
+                <label
+                  key={p.id}
+                  className="flex items-center gap-3 py-2 px-2 rounded-lg cursor-pointer hover:opacity-80 transition-colors"
+                  style={{
+                    backgroundColor: certSelection.has(p.id) ? 'var(--primary-color)10' : 'transparent'
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={certSelection.has(p.id)}
+                    onChange={() => {
+                      setCertSelection(prev => {
+                        const next = new Set(prev)
+                        if (next.has(p.id)) next.delete(p.id)
+                        else next.add(p.id)
+                        return next
+                      })
+                    }}
+                    className="rounded"
+                  />
+                  <span className="flex-1 font-medium">{p.name}</span>
+                  <span className="text-sm" style={{ color: 'var(--text-secondary-color)' }}>
+                    {p.scorePercent}%
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            {/* Actions */}
+            <div className="p-4 border-t flex gap-2" style={{ borderColor: 'var(--border-color)' }}>
+              <button
+                onClick={() => setShowCertModal(false)}
+                className="flex-1 py-2 px-4 rounded-lg border font-medium"
+                style={{ borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDownloadCertificates(certSelection)}
+                disabled={certSelection.size === 0}
+                className="flex-1 py-2 px-4 rounded-lg font-medium text-white disabled:opacity-50"
+                style={{ backgroundColor: 'var(--primary-color)' }}
+              >
+                Download {certSelection.size === processedParticipants.length
+                  ? 'All'
+                  : `${certSelection.size}`} Certificate{certSelection.size !== 1 ? 's' : ''}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -8,6 +8,7 @@ import { LiveEngagement } from '../LiveEngagement'
 import { SoundControl } from '../SoundControl'
 import { useGameTheme } from '../../hooks/useGameTheme'
 import { FirestoreService, type Question, type OrganizationBranding } from '../../lib/firestore'
+import { serverNow } from '../../lib/timerSync'
 import { ReactionOverlay } from '../ReactionOverlay'
 
 interface BingoItem {
@@ -227,7 +228,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
 
         // If we have an anchor, calculate from it (prevents drift)
         if (timerAnchorRef.current > 0) {
-          const elapsed = Math.floor((Date.now() - timerAnchorRef.current) / 1000)
+          const elapsed = Math.floor((serverNow() - timerAnchorRef.current) / 1000)
           const remaining = Math.max(0, (timeLimit || 0) - elapsed)
 
           if (remaining <= 0) {
@@ -261,7 +262,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
       (updatedSession) => {
         if (!updatedSession || gameCompleteRef.current) return
 
-        // Sync timer anchor from presenter (one-time or on resume)
+        // Sync timer anchor from presenter (in server time — no skew correction needed)
         if (updatedSession.timerStartedAt && updatedSession.sessionTimeLimit) {
           timerAnchorRef.current = updatedSession.timerStartedAt
         }
@@ -270,14 +271,14 @@ export const BingoGame: React.FC<BingoGameProps> = ({
         if (updatedSession.timerPaused && !timerPausedRef.current) {
           timerPausedRef.current = true
           if (timerAnchorRef.current > 0) {
-            const elapsed = Math.floor((Date.now() - timerAnchorRef.current) / 1000)
+            const elapsed = Math.floor((serverNow() - timerAnchorRef.current) / 1000)
             pausedRemainingRef.current = Math.max(0, (timeLimit || 0) - elapsed)
           } else {
             pausedRemainingRef.current = updatedSession.pausedTimeRemaining || timeRemaining
           }
         } else if (!updatedSession.timerPaused && timerPausedRef.current) {
           timerPausedRef.current = false
-          // Anchor updated by presenter on resume
+          // Anchor updated by presenter on resume (in server time)
           if (updatedSession.timerStartedAt) {
             timerAnchorRef.current = updatedSession.timerStartedAt
           }
@@ -411,7 +412,7 @@ export const BingoGame: React.FC<BingoGameProps> = ({
           winCondition
         }
       ).catch(err => console.error('Error persisting bingo state:', err))
-    }, 2000)
+    }, 5000)
   }, [sessionId, participantId, score, streak, markedCells, totalCells, gameWon, winCondition])
 
   // Core marking logic — called directly (no quiz) or after correct challenge answer

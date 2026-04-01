@@ -3,6 +3,8 @@ import jsPDF from 'jspdf'
 import { ref, getBlob } from 'firebase/storage'
 import { storage } from './firebase'
 
+export type CertificateTemplate = 'elegant' | 'cpd-professional' | 'minimal'
+
 export interface AttendanceCertificateData {
   participantName: string
   sessionTitle: string
@@ -25,6 +27,16 @@ export interface AttendanceCertificateData {
   cpdPoints?: number          // Number of CPD points available
   cpdRequiresPass?: boolean   // Whether pass was required to earn CPD
   cpdEarned?: boolean         // Whether this participant actually earned CPD
+  cpdVerifiable?: boolean     // Whether CPD points are verifiable or non-verifiable
+  // Template selection
+  template?: CertificateTemplate
+  // CPD-professional template fields
+  companyDescriptor?: string    // e.g. "Attorneys Notaries Conveyancers" — subtitle under org name
+  speaker?: string              // Speaker/presenter name
+  venue?: string                // Training venue
+  cpdCategory?: string          // e.g. "Personal Development", "Legal Practice"
+  attendeeLabel?: string        // e.g. "Estate Agent", "Attendee" — label for participant field
+  websiteUrl?: string           // e.g. "www.abgross.co.za" — shown in footer
 }
 
 const formatDate = (date: Date): string => {
@@ -116,6 +128,30 @@ const fitInBox = (w: number, h: number, maxW: number, maxH: number) => {
   return { width: w * scale, height: h * scale }
 }
 
+/**
+ * Convert a transparent PNG to JPEG with white background.
+ * jsPDF renders transparent PNG pixels as black. JPEG has no alpha channel,
+ * so white fills naturally. The JPEG is drawn AFTER the signature line,
+ * overlapping it like a real pen signature on paper.
+ */
+const flattenToJpeg = (dataUrl: string): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0)
+      resolve(canvas.toDataURL('image/jpeg', 0.95))
+    }
+    img.onerror = () => resolve(dataUrl)
+    img.src = dataUrl
+  })
+}
+
 // Draw a thin decorative divider with small diamond center
 const drawDivider = (doc: jsPDF, y: number, centerX: number, halfWidth: number, color: [number, number, number]) => {
   doc.setDrawColor(...color)
@@ -130,13 +166,335 @@ const drawDivider = (doc: jsPDF, y: number, centerX: number, halfWidth: number, 
   doc.triangle(centerX, y - d, centerX - d, y, centerX, y + d, 'F')
 }
 
-export const generateAttendanceCertificate = async (data: AttendanceCertificateData): Promise<Blob> => {
-  const doc = new jsPDF({
-    orientation: 'landscape',
-    unit: 'mm',
-    format: 'a4'
-  })
+/**
+ * CPD Professional template — matches Abrahams & Gross Inc. physical certificates exactly.
+ * Layout (landscape A4):
+ * - LEFT edge: "CERTIFICATE" written vertically (rotated 90° CCW, bottom to top)
+ * - TOP area (right of vertical text): Org block — logo | org name, rule, descriptor
+ * - Below org: Large CPD points number left, category + "CPD Points Earned" text right
+ * - Form fields with underlines (attendee, topic, date, venue, speaker)
+ * - CPD qualification statement
+ * - Signature line + "Signed on behalf of..." bottom-left
+ * - Website URL bottom-right
+ * No decorative borders — clean professional look.
+ */
+const drawCpdProfessionalPage = async (
+  doc: jsPDF,
+  data: AttendanceCertificateData,
+  logoBase64: string | null,
+  signatureBase64: string | null
+): Promise<void> => {
+  const pageWidth = doc.internal.pageSize.getWidth()  // 297mm landscape
+  const pageHeight = doc.internal.pageSize.getHeight() // 210mm landscape
 
+  const primary = hexToRgb(data.primaryColor || '#1a2744')
+  const participantName = sanitizeForPdf(data.participantName)
+  const sessionTitle = sanitizeForPdf(data.sessionTitle)
+
+  // White background
+  doc.setFillColor(255, 255, 255)
+  doc.rect(0, 0, pageWidth, pageHeight, 'F')
+
+  // ── "CERTIFICATE" — vertical text along the left edge, light grey watermark style ──
+  // Physical reference: single rotated word in silver/light-grey serif, bottom-to-top, with letter-spacing
+  // "CERTIFICATE" — centered in the left margin strip (0 to contentLeft=50mm)
+  const certFontSize = 76
+  const certText = 'CERTIFICATE'
+  doc.setFontSize(certFontSize)
+  doc.setFont('helvetica', 'bold')
+  // Measure text height (ascender) to find true center — approximate cap height as 70% of font size in mm
+  const capHeightMm = certFontSize * 0.353 * 0.72 // pt → mm, then cap height ratio
+  const verticalX = (50 - capHeightMm) / 2 + capHeightMm // center the glyph block in 0–50mm margin
+  // Per-letter shadow — two light sources: top edge and bottom edge of page
+  // Letters near the top get shadow pushed DOWN (light from above)
+  // Letters near the bottom get shadow pushed UP (light from below)
+  // Middle letters: shadows cancel, minimal offset
+  const letters = certText.split('')
+  const letterWidths = letters.map(l => { doc.setFontSize(certFontSize); return doc.getTextWidth(l) })
+  const totalWidth = letterWidths.reduce((a, b) => a + b, 0)
+  let startY = (pageHeight + totalWidth) / 2 // bottom of first letter (word reads bottom-to-top)
+
+  for (let i = 0; i < letters.length; i++) {
+    const letterY = startY
+    // Normalized position: -1 at bottom of page, +1 at top
+    const normalizedPos = ((pageHeight - letterY) / pageHeight) * 2 - 1
+    // Shadow Y offset: positive = shadow falls down page (toward bottom), negative = toward top
+    // Top light pushes shadow down, bottom light pushes shadow up
+    // Blend: near top → shadow down, near bottom → shadow up
+    const shadowOffsetY = normalizedPos * 1.5
+    const shadowOffsetX = 0.8
+
+    // Shadow layer
+    doc.setTextColor(170, 172, 178)
+    doc.text(letters[i], verticalX + shadowOffsetX, letterY + shadowOffsetY, { angle: 90 })
+
+    // Main letter
+    doc.setTextColor(0, 0, 0)
+    doc.text(letters[i], verticalX, letterY, { angle: 90 })
+
+    startY -= letterWidths[i]
+  }
+
+  // Content area starts to the right of the vertical text
+  const contentLeft = 50
+  const contentRight = pageWidth - 25
+  const contentTop = 22
+
+  // ── Org block — top area ──
+  // If logo is present, show logo ONLY (logo already contains org name + descriptor).
+  // If no logo, show org name text + rule + descriptor as fallback.
+  let y = contentTop
+
+  if (logoBase64) {
+    // Logo contains org name + descriptor — just show the logo, larger
+    try {
+      const logoDims = await getImageDimensions(logoBase64)
+      // Logo should sit prominently — allow up to ~60% of content width, tall enough to be proud
+      const maxLogoW = (contentRight - contentLeft) * 0.6
+      const logoFit = fitInBox(logoDims.width, logoDims.height, maxLogoW, 42)
+      doc.addImage(logoBase64, 'PNG', contentLeft, y, logoFit.width, logoFit.height)
+      y += logoFit.height + 10
+    } catch {
+      y += 30
+    }
+  } else if (data.organizationName) {
+    const orgName = sanitizeForPdf(data.organizationName).toUpperCase()
+    const descriptor = data.companyDescriptor
+      ? sanitizeForPdf(data.companyDescriptor).toUpperCase()
+      : ''
+
+    doc.setTextColor(...primary)
+    doc.setFontSize(20)
+    doc.setFont('helvetica', 'bold')
+    doc.text(orgName, contentLeft, y + 12)
+
+    // Thin horizontal rule under org name
+    const ruleY = y + 17
+    doc.setDrawColor(...primary)
+    doc.setLineWidth(0.5)
+    doc.line(contentLeft, ruleY, contentRight, ruleY)
+
+    // Descriptor below the rule
+    if (descriptor) {
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(...primary)
+      doc.text(descriptor, contentLeft, ruleY + 7)
+    }
+
+    y = ruleY + 14
+  } else {
+    y += 30
+  }
+
+  // ── CPD row: large number left, category + "CPD Points Earned" right ──
+  const category = data.cpdCategory || 'Personal Development'
+  const hasPoints = !!data.cpdPoints && data.cpdEarned
+
+  if (hasPoints) {
+    // Large CPD points number — left side, black bold
+    const pointsStr = String(data.cpdPoints)
+    doc.setFontSize(28)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(0, 0, 0)
+    doc.text(pointsStr, contentLeft, y + 8)
+
+    // Category + "CPD Points Earned (verifiable/non-verifiable)" — right of number, black normal
+    const numWidth = doc.getTextWidth(pointsStr)
+    const textX = contentLeft + numWidth + 6
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(0, 0, 0)
+    doc.text(category, textX, y + 2)
+    doc.text(
+      `CPD Points Earned (${data.cpdVerifiable ? 'verifiable' : 'non-verifiable'})`,
+      textX, y + 8
+    )
+  } else {
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(0, 0, 0)
+    doc.text(category, contentLeft, y + 4)
+  }
+
+  y += 10
+
+  // ── Form fields — label: value with underline extending to right margin ──
+  // Physical ref: generous spacing between fields, heavier underlines
+  const fieldSpacing = 14
+  const attendeeLabel = data.attendeeLabel || 'Attendee'
+
+  const drawField = (label: string, value: string, fieldY: number) => {
+    // Label — regular weight, smaller than value for visual hierarchy
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'normal')
+    const labelText = label.toUpperCase() + ':'
+    doc.text(labelText, contentLeft, fieldY)
+
+    const labelWidth = doc.getTextWidth(labelText)
+    const lineStartX = contentLeft + labelWidth + 2
+
+    // Value — bold, larger
+    if (value) {
+      doc.setTextColor(0, 0, 0)
+      doc.setFontSize(13)
+      doc.setFont('helvetica', 'bold')
+      doc.text(sanitizeForPdf(value), lineStartX + 4, fieldY)
+    }
+
+    // Underline from after label to right margin
+    doc.setDrawColor(0, 0, 0)
+    doc.setLineWidth(0.5)
+    doc.line(lineStartX, fieldY + 3, contentRight, fieldY + 3)
+  }
+
+  y += fieldSpacing
+  drawField(attendeeLabel, participantName, y)
+
+  y += fieldSpacing
+  drawField('Topic', sessionTitle, y)
+
+  y += fieldSpacing
+  drawField('Date', formatDate(data.completionDate), y)
+
+  y += fieldSpacing
+  drawField('Venue', data.venue || '', y)
+
+  y += fieldSpacing
+  const speakerName = data.speaker || data.signerName || ''
+  drawField('Speaker', speakerName, y)
+
+  // Score line (if available)
+  if (data.totalQuestions !== undefined && data.correctAnswers !== undefined) {
+    y += fieldSpacing
+    const pct = Math.round((data.correctAnswers / data.totalQuestions) * 100)
+    const passed = data.passingScore ? pct >= data.passingScore : pct >= 60
+    drawField('Score', `${pct}% (${data.correctAnswers}/${data.totalQuestions})${passed ? ' - Passed' : ''}`, y)
+  }
+
+  // ── CPD qualification statement — above signature, matching physical order ──
+  if (hasPoints) {
+    y += fieldSpacing
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.text(
+      'THIS TRAINING SESSION QUALIFIES THE ATTENDEE TO EARN CPD POINTS',
+      contentLeft, y
+    )
+  }
+
+  // ── Signature block — image sits above the line, text below it ──
+  // Image top starts below CPD text with a small gap
+  const sigImageTop = y + 6
+  let sigLineY = sigImageTop + 18 // default line position if no image
+
+  // Signature image — placed first, line drawn on top at the bottom edge
+  if (signatureBase64) {
+    try {
+      const flatSig = await flattenToJpeg(signatureBase64)
+      const sigDims = await getImageDimensions(flatSig)
+      const sigFit = fitInBox(sigDims.width, sigDims.height, 55, 18)
+      doc.addImage(flatSig, 'JPEG', contentLeft, sigImageTop, sigFit.width, sigFit.height)
+      sigLineY = sigImageTop + sigFit.height
+    } catch { /* skip */ }
+  }
+
+  // Signature line — drawn ON TOP of the image at its bottom edge
+  const sigLineWidth = 120
+  doc.setDrawColor(0, 0, 0)
+  doc.setLineWidth(0.5)
+  doc.line(contentLeft, sigLineY, contentLeft + sigLineWidth, sigLineY)
+
+  // Signer name + title below signature line
+  let sigTextY = sigLineY + 2
+  if (data.signerName) {
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'bold')
+    doc.text(sanitizeForPdf(data.signerName), contentLeft, sigTextY + 6)
+    sigTextY += 6
+    if (data.signerTitle) {
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.text(sanitizeForPdf(data.signerTitle), contentLeft, sigTextY + 5)
+      sigTextY += 5
+    }
+  }
+
+  // "Signed on behalf of [Org]" — below signer details
+  const signedOnBehalfY = data.signerName ? sigTextY + 5 : sigLineY + 6
+  doc.setTextColor(80, 80, 80)
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'italic')
+  const signedText = data.organizationName
+    ? `Signed on behalf of ${sanitizeForPdf(data.organizationName)}`
+    : 'Authorized Signature'
+  doc.text(signedText, contentLeft, signedOnBehalfY)
+
+  // ── Footer — website URL pinned to bottom-right of page ──
+  const footerY = pageHeight - 8
+  if (data.websiteUrl) {
+    doc.setTextColor(100, 100, 100)
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text(sanitizeForPdf(data.websiteUrl), contentRight, footerY, { align: 'right' })
+  }
+}
+
+/** Load a logo or signature image from URL, returning base64 data URL or null */
+// Module-level image cache — avoids re-downloading the same logo/signature
+// across multiple individual certificate downloads in the same session
+const imageCache = new Map<string, string | null>()
+
+const resolveImageToBase64 = async (urlOrBase64: string | undefined): Promise<string | null> => {
+  if (!urlOrBase64) return null
+  try {
+    if (urlOrBase64.startsWith('http')) {
+      if (imageCache.has(urlOrBase64)) return imageCache.get(urlOrBase64)!
+      const result = await loadImageForPdf(urlOrBase64)
+      imageCache.set(urlOrBase64, result)
+      return result
+    }
+    return urlOrBase64 // already base64
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Draw a single certificate on the CURRENT page, dispatching to the correct template.
+ */
+const drawCertificatePage = async (
+  doc: jsPDF,
+  data: AttendanceCertificateData,
+  logoBase64: string | null,
+  signatureBase64: string | null
+): Promise<void> => {
+  const template = data.template || 'elegant'
+  switch (template) {
+    case 'cpd-professional':
+      return drawCpdProfessionalPage(doc, data, logoBase64, signatureBase64)
+    case 'minimal':
+      // TODO: minimal template — falls through to elegant for now
+      return drawElegantPage(doc, data, logoBase64, signatureBase64)
+    case 'elegant':
+    default:
+      return drawElegantPage(doc, data, logoBase64, signatureBase64)
+  }
+}
+
+/**
+ * Elegant template — centered layout with decorative borders and diamond dividers.
+ * The original certificate design.
+ */
+const drawElegantPage = async (
+  doc: jsPDF,
+  data: AttendanceCertificateData,
+  logoBase64: string | null,
+  signatureBase64: string | null
+): Promise<void> => {
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
   const centerX = pageWidth / 2
@@ -180,30 +538,6 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
   // Bottom-right
   doc.line(pageWidth - cInset, pageHeight - cInset, pageWidth - cInset - cLen, pageHeight - cInset)
   doc.line(pageWidth - cInset, pageHeight - cInset, pageWidth - cInset, pageHeight - cInset - cLen)
-
-  // ── Pre-load images before calculating layout ──
-  let logoBase64: string | null = null
-  let signatureBase64: string | null = null
-
-  if (data.organizationLogo) {
-    try {
-      if (data.organizationLogo.startsWith('http')) {
-        logoBase64 = await loadImageForPdf(data.organizationLogo)
-      } else {
-        logoBase64 = data.organizationLogo // already base64
-      }
-    } catch { /* skip */ }
-  }
-
-  if (data.signatureImage) {
-    try {
-      if (data.signatureImage.startsWith('http')) {
-        signatureBase64 = await loadImageForPdf(data.signatureImage)
-      } else {
-        signatureBase64 = data.signatureImage
-      }
-    } catch { /* skip */ }
-  }
 
   // ── Content area — vertically centered between borders ──
   // Corner ornaments extend to y=34 (top) and y=176 (bottom on A4 landscape 210mm)
@@ -337,25 +671,26 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
   doc.text(formatDate(data.completionDate), centerX, y + 5, { align: 'center' })
   y += dateH
 
-  // ── Signature block: image → line → name → title → org ──
+  // ── Signature block: line first, then image on top, then name/title/org ──
   if (hasSignature || hasSignerName || hasOrg) {
-    // Signature image — bottom-aligned so it sits right above the line
+    y += 16 // space for signature image
+
+    // Signature line — drawn first so the image overlaps it
+    doc.setDrawColor(180, 180, 180)
+    doc.setLineWidth(0.3)
+    doc.line(centerX - 35, y, centerX + 35, y)
+
+    // Signature image — drawn AFTER line, centered vertically on it
     if (signatureBase64) {
       try {
-        const sigDims = await getImageDimensions(signatureBase64)
-        const sigFit = fitInBox(sigDims.width, sigDims.height, 45, 14)
-        // Place image so its bottom edge is 1mm above where the line will be
-        doc.addImage(signatureBase64, 'PNG', centerX - sigFit.width / 2, y + (16 - sigFit.height) - 1, sigFit.width, sigFit.height)
-        y += 16
+        const flatSig = await flattenToJpeg(signatureBase64)
+        const sigDims = await getImageDimensions(flatSig)
+        const sigFit = fitInBox(sigDims.width, sigDims.height, 45, 16)
+        doc.addImage(flatSig, 'JPEG', centerX - sigFit.width / 2, y - sigFit.height / 2, sigFit.width, sigFit.height)
       } catch {
         // Skip signature on error
       }
     }
-
-    // Signature line
-    doc.setDrawColor(180, 180, 180)
-    doc.setLineWidth(0.3)
-    doc.line(centerX - 35, y, centerX + 35, y)
     y += 2
 
     // Signer name — directly below line
@@ -396,8 +731,59 @@ export const generateAttendanceCertificate = async (data: AttendanceCertificateD
     pageHeight - 14,
     { align: 'center' }
   )
+}
+
+export const generateAttendanceCertificate = async (data: AttendanceCertificateData): Promise<Blob> => {
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4'
+  })
+
+  // Load images for this single certificate
+  const logoBase64 = await resolveImageToBase64(data.organizationLogo)
+  const signatureBase64 = await resolveImageToBase64(data.signatureImage)
+
+  await drawCertificatePage(doc, data, logoBase64, signatureBase64)
 
   return doc.output('blob')
+}
+
+/**
+ * Generate a single PDF containing all certificates (one per page).
+ * Logo and signature images are loaded ONCE from Firebase Storage,
+ * then reused for every participant — avoids N redundant network calls.
+ */
+export const generateMergedCertificatesPDF = async (
+  allData: AttendanceCertificateData[],
+  filename?: string
+): Promise<void> => {
+  if (allData.length === 0) return
+
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4'
+  })
+
+  // Pre-load logo and signature ONCE from the first entry that has them
+  // (all participants in the same session share the same org branding)
+  const logoSource = allData.find(d => d.organizationLogo)?.organizationLogo
+  const signatureSource = allData.find(d => d.signatureImage)?.signatureImage
+  const [logoBase64, signatureBase64] = await Promise.all([
+    resolveImageToBase64(logoSource),
+    resolveImageToBase64(signatureSource)
+  ])
+
+  for (let i = 0; i < allData.length; i++) {
+    if (i > 0) {
+      doc.addPage()
+    }
+    await drawCertificatePage(doc, allData[i], logoBase64, signatureBase64)
+  }
+
+  // Save the merged PDF
+  doc.save(filename || 'Attendance_Certificates.pdf')
 }
 
 export const downloadAttendanceCertificate = async (data: AttendanceCertificateData, filename?: string): Promise<void> => {

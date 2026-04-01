@@ -9,16 +9,14 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import { OrgLogo } from '../components/OrgLogo'
 import { FirestoreService, type GameSession, type Quiz, type Participant } from '../lib/firestore'
+import { serverNow } from '../lib/timerSync'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { soundSystem } from '../lib/soundSystem'
 import { CountdownOverlay } from '../components/CountdownOverlay'
 import { calculateSessionAwards, calculateBingoAwards, type Award, type AwardResults } from '../lib/awardCalculator'
 import { generateDebugParticipants } from '../lib/debugData'
-import { StagedReveal, RevealSlot, type RevealPhase } from '../components/presenter/StagedReveal'
-import ResultsPodium from '../components/presenter/ResultsPodium'
-import AwardsCeremony from '../components/presenter/AwardsCeremony'
-import { PresenterLeaderboard } from '../components/presenter/PresenterLeaderboard'
-import { PresenterStats } from '../components/presenter/PresenterStats'
+import { type RevealPhase } from '../components/presenter/StagedReveal'
+import { PresenterResultsSummary } from '../components/presenter/PresenterResultsSummary'
 import { PresenterCanvas } from '../components/presenter/PresenterCanvas'
 import { usePresenterSounds } from '../hooks/usePresenterSounds'
 import { AvatarDisplay } from '../components/AvatarDisplay'
@@ -224,7 +222,7 @@ export const SessionControl: React.FC = () => {
           setIsTimerRunning(false)
           setTimeRemaining(updatedSession.pausedTimeRemaining || sessionTimeLimitRef.current)
         } else {
-          const elapsed = Math.floor((Date.now() - updatedSession.timerStartedAt) / 1000)
+          const elapsed = Math.floor((serverNow() - updatedSession.timerStartedAt) / 1000)
           const remaining = Math.max(0, sessionTimeLimitRef.current - elapsed)
           setTimeRemaining(remaining)
           if (remaining > 0) {
@@ -276,7 +274,7 @@ export const SessionControl: React.FC = () => {
   useEffect(() => {
     if (isTimerRunning && session?.status === 'active' && timerStartedAtRef.current > 0) {
       const timer = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000)
+        const elapsed = Math.floor((serverNow() - timerStartedAtRef.current) / 1000)
         const remaining = Math.max(0, sessionTimeLimitRef.current - elapsed)
 
         setTimeRemaining(prev => {
@@ -347,7 +345,7 @@ export const SessionControl: React.FC = () => {
             if (realSession.timerPaused) {
               setTimeRemaining(realSession.pausedTimeRemaining || bingoTimeLimit)
             } else {
-              const elapsed = Math.floor((Date.now() - realSession.timerStartedAt) / 1000)
+              const elapsed = Math.floor((serverNow() - realSession.timerStartedAt) / 1000)
               const remaining = Math.max(0, bingoTimeLimit - elapsed)
               setTimeRemaining(remaining)
               if (remaining > 0) setIsTimerRunning(true)
@@ -391,7 +389,7 @@ export const SessionControl: React.FC = () => {
           setTimeRemaining(realSession.pausedTimeRemaining || totalTimeLimit)
         } else {
           // Timer is running - calculate current remaining and resume
-          const elapsed = Math.floor((Date.now() - realSession.timerStartedAt) / 1000)
+          const elapsed = Math.floor((serverNow() - realSession.timerStartedAt) / 1000)
           const remaining = Math.max(0, totalTimeLimit - elapsed)
           setTimeRemaining(remaining)
           if (remaining > 0) {
@@ -503,7 +501,7 @@ export const SessionControl: React.FC = () => {
       // After 4 seconds (3-2-1-GO!), set to active with timer anchor
       setTimeout(async () => {
         try {
-          const timerStart = Date.now()
+          const timerStart = serverNow()
           const totalTimeLimit = isBingoSession
             ? (session.settings?.timeLimit || 900)
             : (quiz ? (quiz.timeLimit || 30) * (quiz.questions?.length || 1) : 300)
@@ -512,13 +510,31 @@ export const SessionControl: React.FC = () => {
           timerStartedAtRef.current = timerStart
           sessionTimeLimitRef.current = totalTimeLimit
 
-          // Write anchor to Firestore so all devices can sync
+          // Write server-time anchor to Firestore — all devices use serverNow()
+          // so no clock skew correction needed
           await FirestoreService.updateSession(session.id, {
             status: 'active',
             startTime: new Date(),
             timerStartedAt: timerStart,
             sessionTimeLimit: totalTimeLimit,
-            timerPaused: false
+            timerPaused: false,
+            // Snapshot quiz at start time so reports aren't affected by later edits
+            ...(quiz && {
+              'gameData.quizSnapshot': {
+                title: quiz.title,
+                questionsCount: quiz.questions.length,
+                questions: quiz.questions.map(q => ({
+                  id: q.id,
+                  questionText: q.questionText,
+                  options: q.options,
+                  correctAnswer: q.correctAnswer,
+                  ...(q.isBoss && {
+                    isBoss: true,
+                    bossPointMultiplier: q.bossPointMultiplier || 2,
+                  }),
+                })),
+              }
+            })
           })
 
           setSession(prev => prev ? { ...prev, status: 'active' } : null)
@@ -554,7 +570,7 @@ export const SessionControl: React.FC = () => {
   const resumeSession = async () => {
     // Recalculate anchor: pretend timer started (sessionTimeLimit - remaining) seconds ago
     const remaining = timeRemaining
-    const newAnchor = Date.now() - (sessionTimeLimitRef.current - remaining) * 1000
+    const newAnchor = serverNow() - (sessionTimeLimitRef.current - remaining) * 1000
     timerStartedAtRef.current = newAnchor
     setIsTimerRunning(true)
 
@@ -606,7 +622,7 @@ export const SessionControl: React.FC = () => {
       ? (session?.settings?.timeLimit || 900)
       : (quiz ? (quiz.timeLimit || 30) * (quiz.questions?.length || 1) : 300)
 
-    const newAnchor = Date.now()
+    const newAnchor = serverNow()
     timerStartedAtRef.current = newAnchor
     sessionTimeLimitRef.current = totalTimeLimit
     setTimeRemaining(totalTimeLimit)
@@ -633,11 +649,15 @@ export const SessionControl: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
-  // Convert raw score (100 per correct answer) to percentage string
+  // Convert raw score to percentage string, accounting for boss question multipliers
   const scoreToPercentage = (rawScore: number | string): string => {
     if (typeof rawScore === 'string') return rawScore
     if (!quiz || quiz.questions.length === 0) return `${rawScore}`
-    return `${Math.round((rawScore / (quiz.questions.length * 100)) * 100)}%`
+    const maxScore = quiz.questions.reduce((sum, q) => {
+      const multiplier = q.isBoss ? (q.bossPointMultiplier || 2) : 1
+      return sum + 100 * multiplier
+    }, 0)
+    return `${Math.round((rawScore / maxScore) * 100)}%`
   }
 
   if (loading) {
@@ -683,7 +703,7 @@ export const SessionControl: React.FC = () => {
       {/* Header */}
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-20">
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/sessions')}
@@ -694,7 +714,7 @@ export const SessionControl: React.FC = () => {
               <OrgLogo
                 logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="sm"
+                size="md"
               />
               <div>
                 <h1 className="text-xl font-bold text-primary">{session.title}</h1>
@@ -937,84 +957,22 @@ export const SessionControl: React.FC = () => {
                   </div>
                 )}
 
-                {/* Results content — scaled canvas fills any screen */}
+                {/* Results content — single-frame with staged reveal */}
                 {resultsReady && (
-                    <StagedReveal
-                      key={debugRevealKey}
-                      enabled={resultsReady}
-                      onPhaseChange={(phase) => setRevealPhase(phase)}
-                      awardsCount={awardResults.awards.length}
-                    >
-                      {/* Slide 1: Splash — fills available space, centered */}
-                      <RevealSlot phase="splash" className="flex-1 flex">
-                        <div className="flex flex-col items-center justify-center flex-1">
-                          {currentOrganization?.branding?.logo && (
-                            <img
-                              src={currentOrganization.branding.logo}
-                              alt={currentOrganization.name}
-                              className="h-16 mb-6 object-contain"
-                              style={{ borderRadius: 'var(--logo-border-radius, 0)' }}
-                            />
-                          )}
-                          <Trophy size={80} style={{ color: 'var(--gold-color, #fbbf24)' }} />
-                          <h1 className="text-6xl font-bold mt-8" style={{ color: 'var(--text-color)' }}>
-                            Session Complete!
-                          </h1>
-                          <p className="text-2xl mt-4" style={{ color: 'var(--text-secondary-color)' }}>
-                            {participants.length} participant{participants.length !== 1 ? 's' : ''} competed
-                          </p>
-                        </div>
-                      </RevealSlot>
-
-                      {/* Slide 2: Podium — fills available space, centered */}
-                      <RevealSlot phase="podium" className="flex-1 flex">
-                        {awardResults.topPerformers.length > 0 && (
-                          <div className="flex flex-col items-center justify-center flex-1">
-                            <ResultsPodium
-                              topPerformers={awardResults.topPerformers}
-                              scoreFormatter={scoreToPercentage}
-                              animate={true}
-                            />
-                          </div>
-                        )}
-                      </RevealSlot>
-
-                      {/* Slide 3: Awards — fills available space */}
-                      <RevealSlot phase="awards" className="flex-1 flex">
-                        {awardResults.awards.length > 0 && (
-                          <div className="flex flex-col justify-center flex-1 px-8">
-                            <AwardsCeremony
-                              awards={awardResults.awards}
-                              animate={true}
-                              getAwardIcon={getAwardIcon}
-                            />
-                          </div>
-                        )}
-                      </RevealSlot>
-
-                      {/* Slide 4 (final): Leaderboard + Stats combined — stays on screen */}
-                      <RevealSlot phase="leaderboard" className="flex-1 flex flex-col">
-                        <div className="card flex-1 mx-8">
-                          <PresenterLeaderboard
-                            participants={participants}
-                            quiz={quiz}
-                            isBingoSession={isBingoSession}
-                          />
-                        </div>
-                      </RevealSlot>
-
-                      <RevealSlot phase="stats">
-                        <div className="mx-8">
-                          <PresenterStats
-                            stats={sessionStats}
-                            isBingoSession={isBingoSession}
-                            bingoWinners={participants.filter(p => p.gameState?.gameWon).length}
-                            scoreFormatter={scoreToPercentage}
-                            timeFormatter={(seconds) => isBingoSession ? formatTime(seconds) : `${seconds}s`}
-                          />
-                        </div>
-                      </RevealSlot>
-                    </StagedReveal>
+                  <PresenterResultsSummary
+                    key={debugRevealKey}
+                    participants={participants}
+                    quiz={quiz}
+                    isBingoSession={isBingoSession}
+                    awardResults={awardResults}
+                    sessionStats={sessionStats}
+                    scoreFormatter={scoreToPercentage}
+                    timeFormatter={(seconds) => isBingoSession ? formatTime(seconds) : `${seconds}s`}
+                    getAwardIcon={getAwardIcon}
+                    orgLogo={currentOrganization?.branding?.logo}
+                    orgName={currentOrganization?.name}
+                    onPhaseChange={(phase) => setRevealPhase(phase as RevealPhase)}
+                  />
                 )}
               </div>
             )}
@@ -1064,7 +1022,13 @@ export const SessionControl: React.FC = () => {
                   <div className="space-y-3">
                     {(isBingoSession
                       ? participants
-                      : participants.slice().sort((a, b) => (b.gameState?.score || 0) - (a.gameState?.score || 0))
+                      : participants.slice().sort((a, b) => {
+                        const scoreDiff = (b.gameState?.score || 0) - (a.gameState?.score || 0)
+                        if (scoreDiff !== 0) return scoreDiff
+                        const avgA = a.gameState?.answers?.length ? a.gameState.answers.reduce((s, ans) => s + (ans.timeSpent || 0), 0) / a.gameState.answers.length : 999
+                        const avgB = b.gameState?.answers?.length ? b.gameState.answers.reduce((s, ans) => s + (ans.timeSpent || 0), 0) / b.gameState.answers.length : 999
+                        return avgA - avgB
+                      })
                     ).map((participant, index) => {
                       const gs = participant.gameState
                       // Bingo metrics

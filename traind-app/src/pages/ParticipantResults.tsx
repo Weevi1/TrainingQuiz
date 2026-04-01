@@ -4,6 +4,7 @@ import { Trophy, Star, Zap, Target, Clock, CheckCircle, XCircle, Award, Trending
 import { FirestoreService, type Organization, type Participant } from '../lib/firestore'
 import { useVisualEffects } from '../lib/visualEffects'
 import { applyOrganizationBranding } from '../lib/applyBranding'
+import { getOrganizationCached } from '../lib/orgCache'
 import { ReactionOverlay } from '../components/ReactionOverlay'
 import type { BingoGameState } from '../components/gameModules/BingoGame'
 
@@ -32,6 +33,10 @@ interface ResultsState {
     }>
     settings: {
       passingScore: number
+      cpdEnabled?: boolean
+      cpdPoints?: number
+      cpdRequiresPass?: boolean
+      cpdVerifiable?: boolean
     }
   }
   sessionCode: string
@@ -60,12 +65,13 @@ export const ParticipantResults: React.FC = () => {
     const loadBranding = async () => {
       if (resultsState?.organizationId) {
         try {
-          const org = await FirestoreService.getOrganization(resultsState.organizationId)
+          const org = await getOrganizationCached(resultsState.organizationId)
           if (org) {
             setOrganization(org)
             if (org.branding) {
               applyOrganizationBranding(org.branding)
             }
+            if (org.name) document.title = `${org.name} - Trained`
           }
         } catch (error) {
           console.error('Error loading organization branding:', error)
@@ -73,6 +79,10 @@ export const ParticipantResults: React.FC = () => {
       }
     }
     loadBranding()
+    // Preload certificate module so the dynamic import resolves instantly on tap.
+    // Mobile browsers block downloads when the async chain between user gesture and
+    // download action is too long (network fetch for the chunk breaks the gesture chain).
+    import('../lib/attendanceCertificate').catch(() => {})
   }, [resultsState?.organizationId])
 
   // Celebration reaction overlay state
@@ -120,6 +130,9 @@ export const ParticipantResults: React.FC = () => {
     }
   }, [organization, resultsState])
 
+  // Session-level certificate fields (speaker, venue, cpdCategory)
+  const [sessionCertFields, setSessionCertFields] = useState<{ speaker?: string; venue?: string; cpdCategory?: string }>({})
+
   // Deferred leaderboard: subscribe to session status
   // Personal stats show immediately; leaderboard waits until session ends
   const [sessionCompleted, setSessionCompleted] = useState(!resultsState?.sessionId)
@@ -135,6 +148,14 @@ export const ParticipantResults: React.FC = () => {
     const unsubscribe = FirestoreService.subscribeToSession(
       resultsState.sessionId,
       async (session) => {
+        // Capture session-level cert fields on first callback
+        if (session) {
+          setSessionCertFields({
+            speaker: session.speaker,
+            venue: session.venue,
+            cpdCategory: session.cpdCategory,
+          })
+        }
         if (session?.status === 'completed' && !leaderboardFetchedRef.current) {
           leaderboardFetchedRef.current = true
           // Show loading indicator only if fetch takes >500ms
@@ -177,8 +198,8 @@ export const ParticipantResults: React.FC = () => {
 
   // Render bingo or quiz results (with optional celebration overlay)
   const resultsContent = isBingo
-    ? <BingoResults resultsState={resultsState} navigate={navigate} organization={organization} sessionCompleted={sessionCompleted} liveParticipants={liveParticipants} refreshingLeaderboard={refreshingLeaderboard} />
-    : <QuizResults resultsState={resultsState} navigate={navigate} organization={organization} sessionCompleted={sessionCompleted} liveParticipants={liveParticipants} refreshingLeaderboard={refreshingLeaderboard} />
+    ? <BingoResults resultsState={resultsState} navigate={navigate} organization={organization} sessionCompleted={sessionCompleted} liveParticipants={liveParticipants} refreshingLeaderboard={refreshingLeaderboard} sessionCertFields={sessionCertFields} />
+    : <QuizResults resultsState={resultsState} navigate={navigate} organization={organization} sessionCompleted={sessionCompleted} liveParticipants={liveParticipants} refreshingLeaderboard={refreshingLeaderboard} sessionCertFields={sessionCertFields} />
 
   return (
     <>
@@ -201,7 +222,8 @@ const BingoResults: React.FC<{
   sessionCompleted: boolean
   liveParticipants: Participant[] | null
   refreshingLeaderboard: boolean
-}> = ({ resultsState, navigate, organization, sessionCompleted, liveParticipants, refreshingLeaderboard }) => {
+  sessionCertFields: { speaker?: string; venue?: string; cpdCategory?: string }
+}> = ({ resultsState, navigate, organization, sessionCompleted, liveParticipants, refreshingLeaderboard, sessionCertFields }) => {
   const { participantName, quiz, sessionCode } = resultsState
   const bingoState = resultsState.gameState as BingoGameState
 
@@ -566,15 +588,22 @@ ${achievements.length > 0 ? `🏅 Achievements: ${achievements.map(a => `${a.emo
                     signatureImage: organization?.branding?.signatureUrl,
                     signerName: organization?.branding?.signerName,
                     signerTitle: organization?.branding?.signerTitle,
-                    ...(quiz.settings.cpdEnabled ? {
+                    template: organization?.branding?.certificateTemplate,
+                    companyDescriptor: organization?.branding?.companyDescriptor,
+                    websiteUrl: organization?.branding?.websiteUrl,
+                    speaker: sessionCertFields.speaker,
+                    venue: sessionCertFields.venue,
+                    cpdCategory: sessionCertFields.cpdCategory,
+                    ...(quiz.settings?.cpdEnabled ? {
                       cpdPoints: quiz.settings.cpdPoints,
                       cpdRequiresPass: quiz.settings.cpdRequiresPass,
+                      cpdVerifiable: quiz.settings.cpdVerifiable,
                       cpdEarned: quiz.settings.cpdRequiresPass ? passed : true
                     } : {}),
                   })
                 } catch (error) {
                   console.error('Error generating certificate:', error)
-                  alert('Failed to generate certificate. Please try again.')
+                  alert(`Failed to generate certificate: ${error instanceof Error ? error.message : 'Unknown error'}`)
                 }
               }}
               className="w-full py-4 px-6 rounded-xl font-bold text-lg shadow-lg transition-transform active:scale-95"
@@ -651,7 +680,8 @@ const QuizResults: React.FC<{
   sessionCompleted: boolean
   liveParticipants: Participant[] | null
   refreshingLeaderboard: boolean
-}> = ({ resultsState, navigate, organization, sessionCompleted, liveParticipants, refreshingLeaderboard }) => {
+  sessionCertFields: { speaker?: string; venue?: string; cpdCategory?: string }
+}> = ({ resultsState, navigate, organization, sessionCompleted, liveParticipants, refreshingLeaderboard, sessionCertFields }) => {
   const { participantName, gameState, quiz, sessionCode } = resultsState
   const quizState = gameState as { score: number; streak: number; answers: any[]; totalQuestions: number }
   const correctAnswers = quizState.answers.filter(a => a.isCorrect).length
@@ -819,15 +849,29 @@ const QuizResults: React.FC<{
         signatureImage: organization?.branding?.signatureUrl,
         signerName: organization?.branding?.signerName,
         signerTitle: organization?.branding?.signerTitle,
-        ...(quiz.settings.cpdEnabled ? {
+        template: organization?.branding?.certificateTemplate,
+        companyDescriptor: organization?.branding?.companyDescriptor,
+        websiteUrl: organization?.branding?.websiteUrl,
+        speaker: sessionCertFields.speaker,
+        venue: sessionCertFields.venue,
+        cpdCategory: sessionCertFields.cpdCategory,
+        ...(quiz.settings?.cpdEnabled ? {
           cpdPoints: quiz.settings.cpdPoints,
           cpdRequiresPass: quiz.settings.cpdRequiresPass,
+          cpdVerifiable: quiz.settings.cpdVerifiable,
           cpdEarned: quiz.settings.cpdRequiresPass ? passed : true
         } : {}),
       })
     } catch (error) {
       console.error('Error generating certificate:', error)
-      alert('Failed to generate certificate. Please try again.')
+      // Stale chunk after deploy — prompt reload
+      if (error instanceof Error && error.message.includes('dynamically imported module')) {
+        if (confirm('A new version is available. Refresh to download your certificate?')) {
+          window.location.reload()
+        }
+      } else {
+        alert(`Failed to generate certificate: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      }
     }
   }
 
@@ -1254,9 +1298,13 @@ const LeaderboardSection: React.FC<{
     return null
   }
 
-  const sortedParticipants = [...participants].sort(
-    (a, b) => (b.gameState?.score || b.finalScore || 0) - (a.gameState?.score || a.finalScore || 0)
-  )
+  const sortedParticipants = [...participants].sort((a, b) => {
+    const scoreDiff = (b.gameState?.score || b.finalScore || 0) - (a.gameState?.score || a.finalScore || 0)
+    if (scoreDiff !== 0) return scoreDiff
+    const avgA = a.gameState?.answers?.length ? a.gameState.answers.reduce((s, ans) => s + (ans.timeSpent || 0), 0) / a.gameState.answers.length : 999
+    const avgB = b.gameState?.answers?.length ? b.gameState.answers.reduce((s, ans) => s + (ans.timeSpent || 0), 0) / b.gameState.answers.length : 999
+    return avgA - avgB
+  })
   const myRank = sortedParticipants.findIndex(p => p.id === resultsState.participantId) + 1
   const totalParticipants = sortedParticipants.length
   const beatPercentage = myRank > 0

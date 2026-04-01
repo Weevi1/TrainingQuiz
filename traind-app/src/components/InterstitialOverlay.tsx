@@ -21,6 +21,11 @@ export const InterstitialOverlay: React.FC<InterstitialOverlayProps> = ({
 }) => {
   const completedRef = useRef(false)
 
+  // Slide mode — chapter break with title, body, optional image
+  if (config.mode === 'slide') {
+    return <SlideInterstitial config={config} onComplete={onComplete} completedRef={completedRef} />
+  }
+
   // Legacy config detection: no animationId means v1 CSS-keyframe interstitial
   const isLegacy = !config.animationId
 
@@ -158,6 +163,144 @@ const CustomVideoInterstitial: React.FC<{
         </div>
       )}
     </InterstitialShell>
+  )
+}
+
+// --- Slide interstitial (chapter break) ---
+
+/** Detect if a URL points to a video (MP4/WebM) vs image */
+const isVideoUrl = (url: string): boolean => /\.(mp4|webm|mov)(\?|$)/i.test(url)
+
+const SlideInterstitial: React.FC<{
+  config: InterstitialConfig
+  onComplete: () => void
+  completedRef: React.MutableRefObject<boolean>
+}> = ({ config, onComplete, completedRef }) => {
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const autoAdvance = config.slideAutoAdvance
+  const duration = config.slideAutoAdvanceMs || 5000
+  const hasMedia = !!config.slideImage
+  const hasText = !!(config.slideTitle || config.slideBody)
+
+  // Play audio layer when slide mounts
+  useEffect(() => {
+    if (!config.slideAudio) return
+    const audio = new Audio(config.slideAudio)
+    audioRef.current = audio
+    audio.play().catch(() => {})
+    return () => {
+      audio.pause()
+      audio.src = ''
+      audioRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!autoAdvance) return
+    const timer = setTimeout(() => {
+      if (!completedRef.current) {
+        completedRef.current = true
+        onComplete()
+      }
+    }, duration)
+    return () => clearTimeout(timer)
+  }, [])
+
+  const handleTap = () => {
+    if (!completedRef.current) {
+      completedRef.current = true
+      // Stop audio on dismiss
+      if (audioRef.current) {
+        audioRef.current.pause()
+      }
+      onComplete()
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 flex flex-col items-center justify-center z-50 cursor-pointer"
+      style={{ background: 'rgba(0, 0, 0, 0.92)' }}
+      onClick={handleTap}
+    >
+      {/* Media area — up to 80vh when present */}
+      {hasMedia && (
+        <div
+          className="flex items-center justify-center"
+          style={{
+            maxHeight: hasText ? '65vh' : '80vh',
+            maxWidth: '90vw',
+            animation: 'interstitial-fade-up 0.5s ease-out both'
+          }}
+        >
+          {isVideoUrl(config.slideImage!) ? (
+            <video
+              src={config.slideImage}
+              autoPlay
+              muted={!!config.slideAudio}
+              playsInline
+              loop
+              className="max-w-full max-h-full rounded-2xl shadow-2xl object-contain"
+            />
+          ) : (
+            <img
+              src={config.slideImage}
+              alt=""
+              className="max-w-full max-h-full rounded-2xl shadow-2xl object-contain"
+            />
+          )}
+        </div>
+      )}
+
+      {/* Text area — below media or centered when no media */}
+      <div className={`text-center relative z-10 px-8 max-w-2xl flex flex-col items-center ${hasMedia && hasText ? 'mt-4' : ''}`}>
+        {config.slideTitle && (
+          <h1
+            className={`font-bold text-white leading-tight ${hasMedia ? 'text-2xl md:text-3xl mb-2' : 'text-3xl md:text-5xl mb-4'}`}
+            style={{
+              textShadow: '0 2px 20px rgba(0,0,0,0.3)',
+              animation: 'interstitial-fade-up 0.6s ease-out 0.1s both'
+            }}
+          >
+            {config.slideTitle}
+          </h1>
+        )}
+
+        {config.slideBody && (
+          <p
+            className={`text-white/80 leading-relaxed ${hasMedia ? 'text-base md:text-lg' : 'text-lg md:text-xl'}`}
+            style={{ animation: 'interstitial-fade-up 0.6s ease-out 0.2s both' }}
+          >
+            {config.slideBody}
+          </p>
+        )}
+      </div>
+
+      {/* Footer: progress bar or tap prompt — pinned to bottom */}
+      <div className="absolute bottom-8 left-0 right-0 flex justify-center" style={{ animation: 'interstitial-fade-up 0.6s ease-out 0.3s both' }}>
+        {autoAdvance ? (
+          <div className="w-48 h-1.5 bg-white/20 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-white/70 rounded-full"
+              style={{ animation: `interstitial-progress ${duration}ms linear forwards` }}
+            />
+          </div>
+        ) : (
+          <p className="text-sm text-white/40">Tap anywhere to continue</p>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes interstitial-fade-up {
+          0% { transform: translateY(30px); opacity: 0; }
+          100% { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes interstitial-progress {
+          0% { width: 0%; }
+          100% { width: 100%; }
+        }
+      `}</style>
+    </div>
   )
 }
 

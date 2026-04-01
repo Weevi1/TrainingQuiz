@@ -282,7 +282,7 @@ export const QuizManagement: React.FC = () => {
       {/* Header */}
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-20">
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/dashboard')}
@@ -294,7 +294,7 @@ export const QuizManagement: React.FC = () => {
               <OrgLogo
                 logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="sm"
+                size="md"
               />
               <h1 className="text-xl font-bold text-primary">Quiz Management</h1>
             </div>

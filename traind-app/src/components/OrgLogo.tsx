@@ -3,14 +3,15 @@ import React from 'react'
 interface OrgLogoProps {
   logo?: string
   orgName?: string
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'sm' | 'md' | 'lg' | 'xl'
   className?: string
 }
 
 const sizeMap = {
-  sm: { img: 'h-7', monogram: 'w-7 h-7 text-xs' },
-  md: { img: 'h-8', monogram: 'w-8 h-8 text-sm' },
-  lg: { img: 'h-10', monogram: 'w-10 h-10 text-base' }
+  sm: { img: 'h-8', monogram: 'w-8 h-8 text-xs' },
+  md: { img: 'h-10', monogram: 'w-10 h-10 text-sm' },
+  lg: { img: 'h-12', monogram: 'w-12 h-12 text-base' },
+  xl: { img: 'h-16', monogram: 'w-16 h-16 text-xl' }
 }
 
 /** Generates initials from an org name, e.g. "ESI Attorneys" → "EA" */

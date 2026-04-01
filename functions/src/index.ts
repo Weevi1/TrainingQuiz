@@ -285,6 +285,26 @@ async function handleDirectAdd(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // Maintain user→org index for O(1) login lookup
+    const indexPath =
+      `${collectionPrefix}userOrgIndex/${userRecord.uid}`;
+    const indexRef = admin.firestore().doc(indexPath);
+    const indexSnap = await indexRef.get();
+    if (indexSnap.exists) {
+      const orgIds: string[] = indexSnap.data()?.orgIds || [];
+      if (!orgIds.includes(orgId)) {
+        await indexRef.update({
+          orgIds: [...orgIds, orgId],
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    } else {
+      await indexRef.set({
+        orgIds: [orgId],
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
     // Generate password reset link and send welcome email
     const resetLink = await admin.auth().generatePasswordResetLink(
       data.email,

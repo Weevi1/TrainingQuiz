@@ -7,6 +7,7 @@ import { AvatarDisplay } from '../components/AvatarDisplay'
 import { StickerPicker } from '../components/StickerPicker'
 import { BUILT_IN_STICKERS } from '../lib/builtInStickers'
 import { applyOrganizationBranding } from '../lib/applyBranding'
+import { getOrganizationCached } from '../lib/orgCache'
 
 interface Participant {
   id: string
@@ -104,12 +105,13 @@ export const JoinSession: React.FC = () => {
 
       setSession(foundSession)
 
-      // Load organization branding
+      // Load organization branding (cached + deduplicated)
       try {
-        const org = await FirestoreService.getOrganization(foundSession.organizationId)
+        const org = await getOrganizationCached(foundSession.organizationId)
         if (org) {
           setOrganization(org)
           await applyOrganizationBranding(org.branding)
+          if (org.name) document.title = `${org.name} - Trained`
         }
       } catch (orgError) {
         console.error('Error loading organization branding:', orgError)
@@ -418,7 +420,6 @@ export const JoinSession: React.FC = () => {
                   stickers={[...(organization?.branding?.stickers || []), ...BUILT_IN_STICKERS]}
                   selectedAvatar={selectedAvatar}
                   onSelect={setSelectedAvatar}
-                  participantName={participantName}
                 />
 
                 {/* Volume tip */}

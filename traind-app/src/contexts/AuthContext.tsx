@@ -1,5 +1,5 @@
 // Multi-tenant authentication context
-import React, { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { User as FirebaseUser } from 'firebase/auth'
 import {
   signInWithEmailAndPassword,
@@ -13,6 +13,7 @@ import { auth } from '../lib/firebase'
 import { FirestoreService } from '../lib/firestore'
 import type { User, Organization, UserOrgRole } from '../lib/firestore'
 import { PermissionService, type Permission, type ModuleType } from '../lib/permissions'
+import { readAuthBootstrap } from '../lib/broadcastState'
 
 interface AuthContextType {
   // Authentication state
@@ -59,19 +60,26 @@ interface AuthProviderProps {
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  // Read bootstrap data synchronously before first render (for popup windows)
+  const [bootstrap] = useState(() => readAuthBootstrap())
+  const bootstrappedRef = useRef(!!bootstrap)
+
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null)
-  const [user, setUser] = useState<User | null>(null)
-  const [currentOrganization, setCurrentOrganization] = useState<Organization | null>(null)
-  const [userRole, setUserRole] = useState<string | null>(null)
-  const [availableOrganizations, setAvailableOrganizations] = useState<Array<{ orgId: string; role: string; orgName: string }>>([])
-  const [loading, setLoading] = useState(true)
-  const [organizationsLoading, setOrganizationsLoading] = useState(true)
+  const [user, setUser] = useState<User | null>(bootstrap?.user ?? null)
+  const [currentOrganization, setCurrentOrganization] = useState<Organization | null>(bootstrap?.currentOrganization ?? null)
+  const [userRole, setUserRole] = useState<string | null>(bootstrap?.userRole ?? null)
+  const [availableOrganizations, setAvailableOrganizations] = useState<Array<{ orgId: string; role: string; orgName: string }>>(bootstrap?.availableOrganizations ?? [])
+  const [loading, setLoading] = useState(!bootstrap)
+  const [organizationsLoading, setOrganizationsLoading] = useState(!bootstrap)
 
   // Listen to Firebase auth state changes
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setFirebaseUser(firebaseUser)
-      setOrganizationsLoading(true)
+      // Skip loading flash if we already have bootstrap data — auth will overwrite when ready
+      if (!bootstrappedRef.current) {
+        setOrganizationsLoading(true)
+      }
 
       if (firebaseUser) {
         // Load user data from Firestore
@@ -79,12 +87,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           // First try to get user from Platform Admin collection
           let userData = await FirestoreService.getUser(firebaseUser.uid)
 
-          // If not found in Platform Admin collection, search organization collections
+          // If not found in Platform Admin collection, try fast O(1) index first
+          if (!userData) {
+            const orgIds = await FirestoreService.getUserOrgIndex(firebaseUser.uid)
+            if (orgIds && orgIds.length > 0) {
+              // Fast path: look up user directly in the indexed org
+              for (const orgId of orgIds) {
+                const orgUser = await FirestoreService.getUser(firebaseUser.uid, orgId)
+                if (orgUser) {
+                  userData = orgUser
+                  console.log(`Found user via org index in: ${orgId}`)
+                  break
+                }
+              }
+            }
+          }
+
+          // Fallback: scan all organizations (for users created before the index existed)
           if (!userData) {
             const userResult = await FirestoreService.findUserInAnyOrganization(firebaseUser.uid)
             if (userResult) {
               userData = userResult.user
               console.log(`Found user in organization: ${userResult.orgId}`)
+              // Backfill the index so future logins are fast
+              await FirestoreService.setUserOrgIndex(firebaseUser.uid, userResult.orgId).catch(() => {})
             }
           }
 
@@ -115,7 +141,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         setAvailableOrganizations([])
       }
 
-      // Mark loading as complete
+      // Mark loading as complete — reset bootstrap flag so future auth changes work normally
+      bootstrappedRef.current = false
       setOrganizationsLoading(false)
       setLoading(false)
     })

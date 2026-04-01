@@ -37,7 +37,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   }
 
   // Redirect to login if not authenticated
-  if (!firebaseUser || !user) {
+  // When bootstrapped from parent window, user is set but firebaseUser resolves async — trust user
+  if (!user) {
     return <Navigate to="/login" replace />
   }
 

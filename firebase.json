@@ -3,6 +3,9 @@
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
+  "database": {
+    "rules": "database.rules.json"
+  },
   "storage": {
     "rules": "storage.rules"
   },
@@ -36,11 +39,20 @@
           ]
         },
         {
-          "source": "**/*.@(js|css|png|jpg|jpeg|gif|ico|svg)",
+          "source": "assets/**/*.@(js|css)",
           "headers": [
             {
               "key": "Cache-Control",
-              "value": "max-age=31536000"
+              "value": "max-age=31536000, immutable"
+            }
+          ]
+        },
+        {
+          "source": "**/*.@(png|jpg|jpeg|gif|ico|svg|webp)",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "max-age=86400"
             }
           ]
         }

@@ -80,8 +80,8 @@ export function calculateSessionAwards(
     }
   })
 
-  // Sort by score for top performers
-  const sortedByScore = [...participantStats].sort((a, b) => b.score - a.score)
+  // Sort by score for top performers (tiebreak: faster avg time wins)
+  const sortedByScore = [...participantStats].sort((a, b) => b.score - a.score || a.avgTime - b.avgTime)
 
   // 1. Perfect Score Award - 100% accuracy
   const perfectScorers = participantStats.filter(p => p.accuracy === 100)
@@ -237,8 +237,8 @@ export function calculateBingoAwards(
     gameWon: p.gameState!.gameWon || false
   }))
 
-  // Sort by score for top performers
-  const sortedByScore = [...participantStats].sort((a, b) => b.score - a.score)
+  // Sort by score for top performers (tiebreak: faster time wins)
+  const sortedByScore = [...participantStats].sort((a, b) => b.score - a.score || a.timeSpent - b.timeSpent)
 
   // 1. BINGO Champion - Highest score among winners
   const winners = participantStats.filter(p => p.gameWon)

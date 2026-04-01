@@ -7,12 +7,12 @@ import { toBlobURL, fetchFile } from '@ffmpeg/util'
 let ffmpegInstance: FFmpeg | null = null
 let loadPromise: Promise<FFmpeg> | null = null
 
-const CORE_VERSION = '0.12.6'
-const BASE_URL = `https://unpkg.com/@ffmpeg/core@${CORE_VERSION}/dist/esm`
+// Served from public/ffmpeg/ (copied from @ffmpeg/core, bundled with the app)
+const FFMPEG_BASE = `${window.location.origin}/ffmpeg`
 
 /**
- * Lazy-load FFmpeg WASM singleton (~25MB, browser-cached after first load).
- * Only called in Settings upload flow — never on participant devices.
+ * Lazy-load FFmpeg WASM singleton. Files served from own hosting (public/ffmpeg/)
+ * so no external CDN dependency. Only called in trainer upload flows.
  */
 export async function getFFmpeg(
   onProgress?: (message: string) => void
@@ -21,24 +21,30 @@ export async function getFFmpeg(
   if (loadPromise) return loadPromise
 
   loadPromise = (async () => {
-    onProgress?.('Loading conversion engine...')
-    const ffmpeg = new FFmpeg()
+    try {
+      onProgress?.('Loading conversion engine...')
+      const ffmpeg = new FFmpeg()
 
-    ffmpeg.on('log', ({ message }) => {
-      // Forward FFmpeg logs for debugging
-      if (import.meta.env.DEV) {
-        console.log('[FFmpeg]', message)
-      }
-    })
+      ffmpeg.on('log', ({ message }) => {
+        if (import.meta.env.DEV) console.log('[FFmpeg]', message)
+      })
 
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${BASE_URL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${BASE_URL}/ffmpeg-core.wasm`, 'application/wasm'),
-    })
+      const coreURL = await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.js`, 'text/javascript')
+      const wasmURL = await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.wasm`, 'application/wasm')
+      await ffmpeg.load({
+        coreURL,
+        wasmURL,
+        classWorkerURL: `${FFMPEG_BASE}/worker.js`,
+      })
 
-    ffmpegInstance = ffmpeg
-    onProgress?.('Conversion engine ready')
-    return ffmpeg
+      ffmpegInstance = ffmpeg
+      onProgress?.('Conversion engine ready')
+      return ffmpeg
+    } catch (err) {
+      console.error('[FFmpeg] Load failed:', err)
+      loadPromise = null
+      throw err
+    }
   })()
 
   return loadPromise

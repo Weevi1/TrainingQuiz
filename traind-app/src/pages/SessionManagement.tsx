@@ -6,11 +6,15 @@ import { OrgLogo } from '../components/OrgLogo'
 import { FirestoreService, type GameSession } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
+const SESSION_PAGE_SIZE = 100
+
 export const SessionManagement: React.FC = () => {
   const navigate = useNavigate()
   const { currentOrganization, hasPermission } = useAuth()
   const [sessions, setSessions] = useState<GameSession[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'active' | 'completed'>('all')
 
@@ -30,12 +34,32 @@ export const SessionManagement: React.FC = () => {
       currentOrganization.id,
       (sessionList) => {
         setSessions(sessionList)
+        setHasMore(sessionList.length >= SESSION_PAGE_SIZE)
         setLoading(false)
       }
     )
 
     return () => unsubscribe()
   }, [currentOrganization])
+
+  const loadMoreSessions = async () => {
+    if (!currentOrganization || loadingMore || sessions.length === 0) return
+    setLoadingMore(true)
+    try {
+      const lastSession = sessions[sessions.length - 1]
+      const older = await FirestoreService.getOrganizationSessionsPage(
+        currentOrganization.id,
+        SESSION_PAGE_SIZE,
+        lastSession
+      )
+      setSessions(prev => [...prev, ...older])
+      setHasMore(older.length >= SESSION_PAGE_SIZE)
+    } catch (error) {
+      console.error('Error loading more sessions:', error)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   const deleteSession = async (sessionId: string) => {
     if (!confirm('Are you sure you want to delete this session?')) {
@@ -113,7 +137,7 @@ export const SessionManagement: React.FC = () => {
       {/* Header */}
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-20">
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/dashboard')}
@@ -124,7 +148,7 @@ export const SessionManagement: React.FC = () => {
               <OrgLogo
                 logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="sm"
+                size="md"
               />
               <h1 className="text-xl font-bold text-primary">Session Management</h1>
             </div>
@@ -353,6 +377,23 @@ export const SessionManagement: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {hasMore && (
+            <div className="text-center pt-4 border-t border-border mt-4">
+              <button
+                onClick={loadMoreSessions}
+                disabled={loadingMore}
+                className="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+                style={{
+                  backgroundColor: 'var(--surface-color)',
+                  color: 'var(--primary-color)',
+                  border: '1px solid var(--border-color)'
+                }}
+              >
+                {loadingMore ? 'Loading...' : 'Load Older Sessions'}
+              </button>
             </div>
           )}
         </div>

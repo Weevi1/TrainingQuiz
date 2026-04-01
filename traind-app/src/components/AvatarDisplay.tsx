@@ -1,4 +1,4 @@
-// AvatarDisplay — Universal avatar renderer (emoji, DiceBear SVG, or animated sticker video)
+// AvatarDisplay — Universal avatar renderer (emoji, animated sticker video, or image URL)
 import React from 'react'
 
 interface AvatarDisplayProps {
@@ -34,8 +34,8 @@ function isUrl(str: string): boolean {
   return str.startsWith('http://') || str.startsWith('https://')
 }
 
-function isDiceBearUrl(str: string): boolean {
-  return str.includes('dicebear.com') || str.includes('dicebear')
+function isImageUrl(str: string): boolean {
+  return str.includes('.svg') || str.includes('.png') || str.includes('.jpg') || str.includes('.webp')
 }
 
 export const AvatarDisplay: React.FC<AvatarDisplayProps> = ({
@@ -45,8 +45,8 @@ export const AvatarDisplay: React.FC<AvatarDisplayProps> = ({
 }) => {
   const s = sizeMap[size]
 
-  // DiceBear SVG URLs → render as <img> in a circle
-  if (isUrl(avatar) && isDiceBearUrl(avatar)) {
+  // Image URLs (legacy DiceBear SVGs, static images) → render as <img>
+  if (isUrl(avatar) && isImageUrl(avatar)) {
     return (
       <img
         src={avatar}
@@ -58,7 +58,7 @@ export const AvatarDisplay: React.FC<AvatarDisplayProps> = ({
     )
   }
 
-  // Sticker video URLs → render as <video>
+  // Video URLs (animated stickers) → render as <video>
   if (isUrl(avatar)) {
     return (
       <video

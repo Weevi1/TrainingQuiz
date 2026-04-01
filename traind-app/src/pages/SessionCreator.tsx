@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Save, ArrowLeft, Users, Clock, Settings, Play, QrCode, Target, Eye } from 'lucide-react'
+import { Save, ArrowLeft, Users, Clock, Settings, Play, QrCode, Target, Eye, Award } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { OrgLogo } from '../components/OrgLogo'
 import { FirestoreService, type GameSession, type Quiz, isPublished } from '../lib/firestore'
@@ -188,6 +188,7 @@ export const SessionCreator: React.FC = () => {
             enabled: true,
             points: selectedQuiz.settings.cpdPoints || 1,
             requiresPass: selectedQuiz.settings.cpdRequiresPass || false,
+            verifiable: selectedQuiz.settings.cpdVerifiable || false,
             passingScore: selectedQuiz.settings.passingScore
           }
         }
@@ -252,7 +253,7 @@ export const SessionCreator: React.FC = () => {
       {/* Header */}
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-20">
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/sessions')}
@@ -263,7 +264,7 @@ export const SessionCreator: React.FC = () => {
               <OrgLogo
                 logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="sm"
+                size="md"
               />
               <h1 className="text-xl font-bold text-primary">Create Training Session</h1>
             </div>
@@ -354,6 +355,50 @@ export const SessionCreator: React.FC = () => {
               />
             </div>
           </div>
+
+          {/* Certificate details — inline in Session Configuration */}
+          {currentOrganization?.settings?.enableAttendanceCertificates && (
+            <>
+              <div className="border-t border-border mt-6 pt-6">
+                <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-4">
+                  <Award size={14} className="inline mr-1.5" />
+                  Certificate Details
+                </h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Speaker / Presenter</label>
+                  <input
+                    type="text"
+                    value={session.speaker || ''}
+                    onChange={(e) => setSession(prev => ({ ...prev, speaker: e.target.value }))}
+                    className="input"
+                    placeholder="e.g. Nicholas Hayes"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Venue</label>
+                  <input
+                    type="text"
+                    value={session.venue || ''}
+                    onChange={(e) => setSession(prev => ({ ...prev, venue: e.target.value }))}
+                    className="input"
+                    placeholder="e.g. Boardroom, Online"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">CPD Category</label>
+                  <input
+                    type="text"
+                    value={session.cpdCategory || ''}
+                    onChange={(e) => setSession(prev => ({ ...prev, cpdCategory: e.target.value }))}
+                    className="input"
+                    placeholder="e.g. Personal Development"
+                  />
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Quiz Selection (for quiz-based game types) */}

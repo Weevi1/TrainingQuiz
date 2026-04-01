@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { FirestoreService, type Organization, type MediaItem } from '../lib/firestore'
 import { StorageService } from '../lib/storageService'
-import { resizeLogo, resizeSignature } from '../lib/imageResize'
+import { resizeLogo } from '../lib/imageResize'
 import { ThemeEditor, type ThemeEditorData } from './ThemeEditor'
 import { getThemePreset } from '../lib/themePresets'
 import { MediaUploader } from './MediaUploader'
@@ -9,11 +9,10 @@ import {
   ImageIcon,
   Film,
   Smile,
-  PenTool,
-  Upload,
   Loader2,
   Trash2,
   Sparkles,
+  Upload,
 } from 'lucide-react'
 import { BUILT_IN_ANIMATIONS, ANIMATION_CATEGORIES, type BuiltInAnimation } from '../lib/builtInAnimations'
 
@@ -24,10 +23,7 @@ interface BrandingEditorProps {
 }
 
 export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organization }) => {
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const logoInputRef = useRef<HTMLInputElement>(null)
-  const [uploading, setUploading] = useState(false)
-  const [removing, setRemoving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [removingLogo, setRemovingLogo] = useState(false)
   const [logoUrl, setLogoUrl] = useState<string | undefined>(
@@ -36,12 +32,6 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
   const [logoRounded, setLogoRounded] = useState(
     organization?.branding?.logoRounded ?? false
   )
-  const [signatureUrl, setSignatureUrl] = useState<string | undefined>(
-    organization?.branding?.signatureUrl
-  )
-  const [signerName, setSignerName] = useState(organization?.branding?.signerName || '')
-  const [signerTitle, setSignerTitle] = useState(organization?.branding?.signerTitle || '')
-  const [savingSignerInfo, setSavingSignerInfo] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [reactions, setReactions] = useState<{
@@ -70,7 +60,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       const optimized = await resizeLogo(file)
       const url = await StorageService.uploadLogo(orgId, optimized)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, logo: url }
+        'branding.logo': url
       } as any)
       setLogoUrl(url)
       setSuccessMsg('Logo saved successfully!')
@@ -90,7 +80,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
     try {
       await StorageService.deleteLogo(orgId)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, logo: '' }
+        'branding.logo': ''
       } as any)
       setLogoUrl(undefined)
       setSuccessMsg('Logo removed.')
@@ -106,7 +96,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
     setLogoRounded(rounded)
     try {
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, logoRounded: rounded }
+        'branding.logoRounded': rounded
       } as any)
       document.documentElement.style.setProperty('--logo-border-radius', rounded ? '0.75rem' : '0')
       setSuccessMsg(rounded ? 'Rounded corners enabled.' : 'Rounded corners disabled.')
@@ -114,70 +104,6 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
     } catch (err: any) {
       setLogoRounded(!rounded)
       setError(err.message || 'Failed to update logo style')
-    }
-  }
-
-  const handleSignatureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    setError(null)
-    setSuccessMsg(null)
-    setUploading(true)
-    try {
-      const optimized = await resizeSignature(file)
-      const url = await StorageService.uploadSignature(orgId, optimized)
-      await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, signatureUrl: url }
-      } as any)
-      setSignatureUrl(url)
-      setSuccessMsg('Signature saved successfully!')
-      setTimeout(() => setSuccessMsg(null), 4000)
-    } catch (err: any) {
-      setError(err.message || 'Failed to upload signature')
-    } finally {
-      setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }
-
-  const handleSignatureRemove = async () => {
-    setError(null)
-    setSuccessMsg(null)
-    setRemoving(true)
-    try {
-      await StorageService.deleteSignature(orgId)
-      await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, signatureUrl: '' }
-      } as any)
-      setSignatureUrl(undefined)
-      setSuccessMsg('Signature removed.')
-      setTimeout(() => setSuccessMsg(null), 4000)
-    } catch (err: any) {
-      setError(err.message || 'Failed to remove signature')
-    } finally {
-      setRemoving(false)
-    }
-  }
-
-  const handleSaveSignerInfo = async () => {
-    setError(null)
-    setSuccessMsg(null)
-    setSavingSignerInfo(true)
-    try {
-      await FirestoreService.updateOrganization(orgId, {
-        branding: {
-          ...organization.branding,
-          signerName: signerName.trim(),
-          signerTitle: signerTitle.trim(),
-        }
-      } as any)
-      setSuccessMsg('Signer details saved.')
-      setTimeout(() => setSuccessMsg(null), 4000)
-    } catch (err: any) {
-      setError(err.message || 'Failed to save signer details')
-    } finally {
-      setSavingSignerInfo(false)
     }
   }
 
@@ -199,7 +125,9 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       }
       setReactions(updated)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, reactions: updated }
+        'branding.correct': updated.correct || [],
+        'branding.incorrect': updated.incorrect || [],
+        'branding.celebration': updated.celebration || [],
       } as any)
       setSuccessMsg('Reaction saved!')
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -221,7 +149,9 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       }
       setReactions(updated)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, reactions: updated }
+        'branding.correct': updated.correct || [],
+        'branding.incorrect': updated.incorrect || [],
+        'branding.celebration': updated.celebration || [],
       } as any)
       setSuccessMsg('Reaction removed.')
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -239,7 +169,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       const updated = [...stickers, newItem]
       setStickers(updated)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, stickers: updated }
+        'branding.stickers': updated
       } as any)
       setSuccessMsg('Sticker saved!')
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -255,7 +185,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       const updated = stickers.filter(s => s.id !== id)
       setStickers(updated)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, stickers: updated }
+        'branding.stickers': updated
       } as any)
       setSuccessMsg('Sticker removed.')
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -272,7 +202,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
     setInterstitialAnimations(updated)
     try {
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, interstitialAnimations: updated }
+        'branding.interstitialAnimations': updated
       } as any)
     } catch (err: any) {
       // Revert on failure
@@ -290,7 +220,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       const updated = [...customAnimations, newItem]
       setCustomAnimations(updated)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, customAnimations: updated }
+        'branding.customAnimations': updated
       } as any)
       setSuccessMsg('Animation saved!')
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -306,7 +236,7 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
       const updated = customAnimations.filter(a => a.id !== id)
       setCustomAnimations(updated)
       await FirestoreService.updateOrganization(orgId, {
-        branding: { ...organization.branding, customAnimations: updated }
+        'branding.customAnimations': updated
       } as any)
       setSuccessMsg('Animation removed.')
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -463,17 +393,14 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
           onSave={async (data: ThemeEditorData) => {
             const preset = getThemePreset(data.themePreset)
             await FirestoreService.updateOrganization(orgId, {
-              branding: {
-                ...organization.branding,
-                themePreset: data.themePreset,
-                colors: data.colors,
-                typography: data.typography,
-                background: data.background,
-                effects: data.effects,
-                gameTheme: preset.gameTheme,
-                primaryColor: data.colors.primary,
-                secondaryColor: data.colors.secondary,
-              }
+              'branding.themePreset': data.themePreset,
+              'branding.colors': data.colors,
+              'branding.typography': data.typography,
+              'branding.background': data.background,
+              'branding.effects': data.effects,
+              'branding.gameTheme': preset.gameTheme,
+              'branding.primaryColor': data.colors.primary,
+              'branding.secondaryColor': data.colors.secondary,
             } as any)
             setSuccessMsg('Theme saved successfully!')
             setTimeout(() => setSuccessMsg(null), 4000)
@@ -624,144 +551,6 @@ export const BrandingEditor: React.FC<BrandingEditorProps> = ({ orgId, organizat
         </div>
       </div>
 
-      {/* Certificate Signature */}
-      <div
-        className="p-6 rounded-xl"
-        style={{ backgroundColor: 'var(--surface-color)', border: '1px solid var(--border-color)' }}
-      >
-        <div className="flex items-center space-x-2 mb-4">
-          <PenTool size={18} style={{ color: 'var(--primary-color)' }} />
-          <h3 className="font-medium" style={{ color: 'var(--text-color)' }}>
-            Certificate Signature
-          </h3>
-        </div>
-        <p className="text-sm mb-4" style={{ color: 'var(--text-secondary-color)' }}>
-          Upload a signature image (PNG, JPG, or WebP, max 2MB) to appear on attendance certificates above the signature line.
-        </p>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          onChange={handleSignatureUpload}
-          className="hidden"
-        />
-
-        {signatureUrl ? (
-          <div className="space-y-4">
-            <div
-              className="p-4 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: 'var(--background-color)', border: '1px solid var(--border-color)' }}
-            >
-              <img
-                src={signatureUrl}
-                alt="Signature preview"
-                className="max-h-20 object-contain"
-              />
-            </div>
-            <div className="flex items-center space-x-3">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                className="px-4 py-2 rounded-lg font-medium text-sm flex items-center space-x-2"
-                style={{
-                  backgroundColor: 'var(--primary-color)',
-                  color: 'var(--text-on-primary-color)',
-                  opacity: uploading ? 0.7 : 1
-                }}
-              >
-                {uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                <span>{uploading ? 'Uploading...' : 'Replace'}</span>
-              </button>
-              <button
-                onClick={handleSignatureRemove}
-                disabled={removing}
-                className="px-4 py-2 rounded-lg font-medium text-sm flex items-center space-x-2 transition-colors"
-                style={{
-                  backgroundColor: 'var(--background-color)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--error-color)',
-                  opacity: removing ? 0.7 : 1
-                }}
-              >
-                {removing ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                <span>{removing ? 'Removing...' : 'Remove'}</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="w-full p-6 rounded-lg border-2 border-dashed flex flex-col items-center space-y-2 transition-colors"
-            style={{
-              borderColor: 'var(--border-color)',
-              color: 'var(--text-secondary-color)',
-              opacity: uploading ? 0.7 : 1
-            }}
-          >
-            {uploading ? (
-              <Loader2 size={24} className="animate-spin" />
-            ) : (
-              <Upload size={24} />
-            )}
-            <span className="text-sm font-medium">
-              {uploading ? 'Uploading...' : 'Click to upload signature image'}
-            </span>
-          </button>
-        )}
-
-        {/* Signer Name & Title */}
-        <div className="mt-6 pt-6 space-y-4" style={{ borderTop: '1px solid var(--border-color)' }}>
-          <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-color)' }}>
-              Signer Name
-            </label>
-            <input
-              type="text"
-              value={signerName}
-              onChange={(e) => setSignerName(e.target.value)}
-              placeholder="e.g. John Smith"
-              className="w-full px-3 py-2 rounded-lg text-sm"
-              style={{
-                backgroundColor: 'var(--background-color)',
-                border: '1px solid var(--border-color)',
-                color: 'var(--text-color)',
-              }}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-color)' }}>
-              Title / Position <span style={{ color: 'var(--text-secondary-color)' }}>(optional)</span>
-            </label>
-            <input
-              type="text"
-              value={signerTitle}
-              onChange={(e) => setSignerTitle(e.target.value)}
-              placeholder="e.g. Training Manager"
-              className="w-full px-3 py-2 rounded-lg text-sm"
-              style={{
-                backgroundColor: 'var(--background-color)',
-                border: '1px solid var(--border-color)',
-                color: 'var(--text-color)',
-              }}
-            />
-          </div>
-          <button
-            onClick={handleSaveSignerInfo}
-            disabled={savingSignerInfo}
-            className="px-4 py-2 rounded-lg font-medium text-sm"
-            style={{
-              backgroundColor: 'var(--primary-color)',
-              color: 'var(--text-on-primary-color)',
-              opacity: savingSignerInfo ? 0.7 : 1,
-            }}
-          >
-            {savingSignerInfo ? 'Saving...' : 'Save Signer Details'}
-          </button>
-        </div>
-
-      </div>
     </div>
   )
 }

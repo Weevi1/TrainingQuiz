@@ -1,18 +1,19 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { useBranding } from '../contexts/BrandingContext'
-import { LogOut, Play, Lock, ArrowRight, List, Settings, X } from 'lucide-react'
+
+import { LogOut, Play, Lock, ArrowRight, List, Settings, X, Award } from 'lucide-react'
 import { OrgLogo } from '../components/OrgLogo'
 import { PlatformAdmin } from './PlatformAdmin'
 import { AVAILABLE_MODULES, type ModuleType } from '../lib/permissions'
 import { FirestoreService, type Quiz, type GameSession, isPublished } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
+import { sendAuthBootstrap } from '../lib/broadcastState'
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate()
-  const { user, currentOrganization, logout, availableOrganizations, switchOrganization, isPlatformAdmin, hasModuleAccess, createOrganization } = useAuth()
-  const { brandingConfig } = useBranding()
+  const { user, currentOrganization, userRole, logout, availableOrganizations, switchOrganization, isPlatformAdmin, hasModuleAccess, createOrganization } = useAuth()
+
 
   // Quick session modal state
   const [showQuizModal, setShowQuizModal] = useState(false)
@@ -20,6 +21,9 @@ export const Dashboard: React.FC = () => {
   const [loadingQuizzes, setLoadingQuizzes] = useState(false)
   const [selectedQuiz, setSelectedQuiz] = useState<Quiz | null>(null)
   const [creatingSession, setCreatingSession] = useState(false)
+  const [sessionSpeaker, setSessionSpeaker] = useState('')
+  const [sessionVenue, setSessionVenue] = useState('')
+  const [sessionCpdCategory, setSessionCpdCategory] = useState('')
 
   // Redirect Platform Admins to admin interface
   if (isPlatformAdmin()) {
@@ -84,6 +88,9 @@ export const Dashboard: React.FC = () => {
     setShowQuizModal(true)
     setLoadingQuizzes(true)
     setSelectedQuiz(null)
+    setSessionSpeaker('')
+    setSessionVenue('')
+    setSessionCpdCategory('')
 
     try {
       const allQuizzes = await FirestoreService.getOrganizationQuizzes(currentOrganization.id)
@@ -124,13 +131,22 @@ export const Dashboard: React.FC = () => {
           showLeaderboard: true,
           enableSounds: true,
           recordSession: true
-        }
+        },
+        ...(sessionSpeaker && { speaker: sessionSpeaker }),
+        ...(sessionVenue && { venue: sessionVenue }),
+        ...(sessionCpdCategory && { cpdCategory: sessionCpdCategory })
       }
 
       const sessionId = await FirestoreService.createSession(sessionData)
 
       setShowQuizModal(false)
       setSelectedQuiz(null)
+
+      // Pre-send auth state so the popup renders instantly (no Firebase Auth wait)
+      if (user && currentOrganization && userRole) {
+        sendAuthBootstrap({ user, currentOrganization, userRole, availableOrganizations })
+      }
+
       window.open(
         `${window.location.origin}/session/${sessionId}`,
         '_blank',
@@ -157,16 +173,18 @@ export const Dashboard: React.FC = () => {
       {/* Header */}
       <header style={{ backgroundColor: 'var(--surface-color)', borderBottom: '1px solid var(--border-color)' }}>
         <div className="max-w-6xl mx-auto px-6">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center py-4">
             <div className="flex items-center space-x-3">
               <OrgLogo
-                logo={brandingConfig?.logo}
+                logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="md"
+                size="xl"
               />
-              <h1 className="text-lg font-semibold" style={{ color: 'var(--primary-color)' }}>
-                {currentOrganization?.name}
-              </h1>
+              {!currentOrganization?.branding?.logo && (
+                <h1 className="text-lg font-semibold" style={{ color: 'var(--primary-color)' }}>
+                  {currentOrganization?.name}
+                </h1>
+              )}
             </div>
 
             <div className="flex items-center space-x-4">
@@ -526,6 +544,74 @@ export const Dashboard: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* Certificate Details — shown when quiz selected and certificates enabled */}
+            {selectedQuiz && currentOrganization?.settings?.enableAttendanceCertificates && (
+              <div className="px-6 pb-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+                <h3
+                  className="text-xs font-semibold uppercase tracking-wider mt-4 mb-3 flex items-center gap-1.5"
+                  style={{ color: 'var(--text-secondary-color)' }}
+                >
+                  <Award size={12} />
+                  Certificate Details
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-color)' }}>
+                      Speaker / Presenter
+                    </label>
+                    <input
+                      type="text"
+                      value={sessionSpeaker}
+                      onChange={(e) => setSessionSpeaker(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                      style={{
+                        backgroundColor: 'var(--background-color)',
+                        color: 'var(--text-color)',
+                        border: '1px solid var(--border-color)'
+                      }}
+                      placeholder="e.g. Nicholas Hayes"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-color)' }}>
+                        Venue
+                      </label>
+                      <input
+                        type="text"
+                        value={sessionVenue}
+                        onChange={(e) => setSessionVenue(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg text-sm"
+                        style={{
+                          backgroundColor: 'var(--background-color)',
+                          color: 'var(--text-color)',
+                          border: '1px solid var(--border-color)'
+                        }}
+                        placeholder="e.g. Boardroom"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary-color)' }}>
+                        CPD Category
+                      </label>
+                      <input
+                        type="text"
+                        value={sessionCpdCategory}
+                        onChange={(e) => setSessionCpdCategory(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg text-sm"
+                        style={{
+                          backgroundColor: 'var(--background-color)',
+                          color: 'var(--text-color)',
+                          border: '1px solid var(--border-color)'
+                        }}
+                        placeholder="e.g. Personal Development"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Modal Footer */}
             {quizzes.length > 0 && (

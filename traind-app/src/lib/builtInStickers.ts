@@ -1,21 +1,205 @@
 // Built-in animated sticker avatars — platform-level defaults
-// These are available to all orgs even without custom uploads.
-// URLs point to platform/stickers/ in Firebase Storage.
-// For initial development, this array is empty — stickers need to be
-// created/sourced and uploaded to Firebase Storage manually.
-// When uploaded, add their download URLs here.
+// Available to all orgs. Source: Google Noto Animated Emoji (Apache 2.0)
+// + 4 original character GIFs (axolotl, bunny, dancing bear, fox)
+// Hosted at gs://traind-platform.firebasestorage.app/platform/stickers/
 
 import type { MediaItem } from './firestore'
 
 export const BUILT_IN_STICKERS: MediaItem[] = [
-  // Stickers will be added here once MP4s are uploaded to
-  // gs://traind-platform.appspot.com/platform/stickers/
-  // Example:
-  // {
-  //   id: 'builtin-star',
-  //   url: 'https://firebasestorage.googleapis.com/...',
-  //   thumbnailUrl: 'https://firebasestorage.googleapis.com/...',
-  //   label: 'Star',
-  //   isBuiltIn: true
-  // },
+  {
+    id: 'builtin-axolotl',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F365e2614.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F365e2614_thumb.webp?alt=media',
+    label: 'Axolotl',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-bunny',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F352ae1b9.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F352ae1b9_thumb.webp?alt=media',
+    label: 'Bunny',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-dancing-bear',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fe2e901e9.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fe2e901e9_thumb.webp?alt=media',
+    label: 'Dancing Bear',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-fox',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fa673c689.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fa673c689_thumb.webp?alt=media',
+    label: 'Fox',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-alien',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F01821af7.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F01821af7_thumb.webp?alt=media',
+    label: 'Alien',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-butterfly',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F9caf7d7f.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F9caf7d7f_thumb.webp?alt=media',
+    label: 'Butterfly',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-cowboy',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fdfd27bcd.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fdfd27bcd_thumb.webp?alt=media',
+    label: 'Cowboy',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-disguise',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F4179d398.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F4179d398_thumb.webp?alt=media',
+    label: 'Disguise',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-dog',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F601fba36.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F601fba36_thumb.webp?alt=media',
+    label: 'Dog',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-dolphin',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F5fd9fb04.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F5fd9fb04_thumb.webp?alt=media',
+    label: 'Dolphin',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-frog',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F4f2797b3.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F4f2797b3_thumb.webp?alt=media',
+    label: 'Frog',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-ghost',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Faf30b412.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Faf30b412_thumb.webp?alt=media',
+    label: 'Ghost',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-glowing-star',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F5f9b0814.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F5f9b0814_thumb.webp?alt=media',
+    label: 'Glowing Star',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-heart-eyes',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fabcd7fdc.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fabcd7fdc_thumb.webp?alt=media',
+    label: 'Heart Eyes',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-monkey',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fb7b70987.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fb7b70987_thumb.webp?alt=media',
+    label: 'Monkey',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-nerd',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F800dd557.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F800dd557_thumb.webp?alt=media',
+    label: 'Nerd',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-octopus',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F7b136a3c.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F7b136a3c_thumb.webp?alt=media',
+    label: 'Octopus',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-owl',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F23cc5a45.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F23cc5a45_thumb.webp?alt=media',
+    label: 'Owl',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-party-face',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F5c4a9388.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F5c4a9388_thumb.webp?alt=media',
+    label: 'Party Face',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-robot',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F09c17c9f.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F09c17c9f_thumb.webp?alt=media',
+    label: 'Robot',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-rocket',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F410798c4.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F410798c4_thumb.webp?alt=media',
+    label: 'Rocket',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-shark',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fbcce7d8b.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fbcce7d8b_thumb.webp?alt=media',
+    label: 'Shark',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-star-struck',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fe36490ff.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2Fe36490ff_thumb.webp?alt=media',
+    label: 'Star Struck',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-sunglasses',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F7a0ae0d5.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F7a0ae0d5_thumb.webp?alt=media',
+    label: 'Sunglasses',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-turtle',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F97f74be7.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F97f74be7_thumb.webp?alt=media',
+    label: 'Turtle',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-unicorn',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F1369c342.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F1369c342_thumb.webp?alt=media',
+    label: 'Unicorn',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-wink',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F9003dfc8.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F9003dfc8_thumb.webp?alt=media',
+    label: 'Wink',
+    isBuiltIn: true,
+  },
+  {
+    id: 'builtin-zany-face',
+    url: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F6e401567.mp4?alt=media',
+    thumbnailUrl: 'https://firebasestorage.googleapis.com/v0/b/traind-platform.firebasestorage.app/o/platform%2Fstickers%2F6e401567_thumb.webp?alt=media',
+    label: 'Zany Face',
+    isBuiltIn: true,
+  },
 ]

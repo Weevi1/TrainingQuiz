@@ -6,6 +6,7 @@ import {
   where,
   orderBy,
   limit,
+  startAfter,
   getDocs,
   getDoc,
   addDoc,
@@ -114,7 +115,10 @@ export type OrganizationBranding = {
   // Logo display options
   logoRounded?: boolean  // Apply rounded corners to logo
 
-  // Certificate signature
+  // Certificate configuration
+  certificateTemplate?: 'elegant' | 'cpd-professional' | 'minimal'
+  companyDescriptor?: string  // e.g. "Attorneys Notaries Conveyancers" — subtitle under org name on cpd-professional certs
+  websiteUrl?: string         // e.g. "www.abgross.co.za" — shown in certificate footer
   signatureUrl?: string
   signerName?: string    // e.g. "John Smith"
   signerTitle?: string   // e.g. "Training Manager"
@@ -179,6 +183,10 @@ export type GameSession = {
     enableSounds: boolean
     recordSession: boolean
   }
+  // Certificate fields (per-session, used by cpd-professional template)
+  speaker?: string              // Speaker/presenter for this session
+  venue?: string                // Venue for this session
+  cpdCategory?: string          // e.g. "Personal Development", "Legal Practice"
   // Timer sync fields (presenter is authoritative)
   timerStartedAt?: number        // Date.now() anchor when timer started (ms)
   sessionTimeLimit?: number      // Total session time in seconds
@@ -202,17 +210,59 @@ export type Question = {
   timeLimit?: number
   difficulty?: 'easy' | 'medium' | 'hard'
   category?: string
+  // Boss question — high-stakes with point multiplier and dramatic intro
+  isBoss?: boolean
+  bossPointMultiplier?: number   // default 2
+  bossIntroText?: string         // e.g. "BONUS ROUND!" or "Critical Question"
+  bossIntroVideo?: string        // Firebase Storage URL (optional custom intro animation)
+  bossIntroAudio?: string        // Firebase Storage URL (optional intro sound)
 }
 
-// Interstitial animations between quiz questions
+// --- Custom answer feedback media (per-quiz) ---
+export type CustomFeedbackConfig = {
+  correctVideo?: string        // Firebase Storage URL — replaces the ✓ icon
+  correctAudio?: string        // Firebase Storage URL — replaces built-in correct sound
+  incorrectVideo?: string
+  incorrectAudio?: string
+}
+
+// --- Milestone triggers (performance-based interstitials) ---
+export type MilestoneType =
+  | 'streak3'           // 3 correct in a row
+  | 'streak5'           // 5 correct in a row
+  | 'streak10'          // 10 correct in a row
+  | 'losing3'           // 3 incorrect in a row
+  | 'halfway'           // 50% of questions answered
+  | 'perfect_halfway'   // 100% correct at 50%+ of questions
+  | 'recovery'          // 3 correct after a streak break (went wrong then recovered)
+
+export type MilestoneConfig = {
+  type: MilestoneType
+  enabled: boolean
+  text?: string         // Override default text
+  video?: string        // Firebase Storage URL (custom celebration/encouragement)
+  audio?: string        // Firebase Storage URL
+}
+
+// Interstitial breaks between quiz questions — either animation or slide (chapter break)
 export type InterstitialConfig = {
   id: string                      // e.g. "int_abc123"
   beforeQuestionIndex: number     // Show BEFORE this question (0 = before first question)
-  animationId: string             // ID of built-in Lottie or custom MediaItem
-  animationType: 'builtin' | 'custom'  // Resolution path
+  mode?: 'animation' | 'slide'   // undefined = 'animation' (backwards compat)
+  // Animation mode fields
+  animationId?: string            // ID of built-in Lottie or custom MediaItem
+  animationType?: 'builtin' | 'custom'  // Resolution path
   text?: string                   // Optional text overlay on top of animation
   sound?: string                  // SoundType (for Lottie or silent MP4; MP4 with audio uses native)
   durationMs?: number             // Override default duration
+  // Slide mode fields (chapter breaks)
+  slideTitle?: string             // e.g. "Section 2: Property Law"
+  slideBody?: string              // Body text / description
+  slideImage?: string             // Firebase Storage URL (optional)
+  slideAudio?: string             // Firebase Storage URL for audio layer (optional)
+  slideDurationSec?: number       // Detected duration of video media (seconds)
+  slideAutoAdvance?: boolean      // false = tap to continue (default), true = auto-advance
+  slideAutoAdvanceMs?: number     // Duration if auto-advance enabled (default 5000)
   // Legacy fields (v1 compat — InterstitialOverlay falls back to CSS keyframe rendering)
   style?: string
   emoji?: string
@@ -226,6 +276,8 @@ export type Quiz = {
   timeLimit: number
   questions: Question[]
   interstitials?: InterstitialConfig[]  // Animation breaks between questions
+  customFeedback?: CustomFeedbackConfig // Custom correct/incorrect animations
+  milestones?: MilestoneConfig[]        // Performance-triggered celebrations
   organizationId: string
   trainerId: string
   settings: {
@@ -271,6 +323,7 @@ export type Participant = {
       timeSpent: number
       confidence?: number
     }>
+    totalQuestions?: number
     // Bingo-specific fields
     gameType?: 'quiz' | 'bingo'
     cellsMarked?: number
@@ -327,6 +380,11 @@ export const getOrgUserCollection = (orgId: string): CollectionReference<Documen
 
 export const getOrgUserDoc = (orgId: string, userId: string): DocumentReference<DocumentData> => {
   return doc(db, getCollectionName('organizations'), orgId, 'users', userId)
+}
+
+// User → Org index: O(1) lookup of which org(s) a user belongs to (avoids scanning all orgs at login)
+const getUserOrgIndexDoc = (userId: string): DocumentReference<DocumentData> => {
+  return doc(db, getCollectionName('userOrgIndex'), userId)
 }
 
 // Legacy - will be replaced by context-aware functions
@@ -407,6 +465,38 @@ export class FirestoreService {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     })
+
+    // Maintain user→org index for O(1) login lookup
+    if (orgId) {
+      await FirestoreService.setUserOrgIndex(userId, orgId)
+    }
+  }
+
+  // Write/update user→org reverse index (called when user joins an org)
+  static async setUserOrgIndex(userId: string, orgId: string): Promise<void> {
+    const indexRef = getUserOrgIndexDoc(userId)
+    const existing = await getDoc(indexRef)
+    if (existing.exists()) {
+      const orgIds: string[] = existing.data().orgIds || []
+      if (!orgIds.includes(orgId)) {
+        await updateDoc(indexRef, { orgIds: [...orgIds, orgId], updatedAt: serverTimestamp() })
+      }
+    } else {
+      await setDoc(indexRef, { orgIds: [orgId], updatedAt: serverTimestamp() })
+    }
+  }
+
+  // Read user→org index (returns orgIds or null if no index exists yet)
+  static async getUserOrgIndex(userId: string): Promise<string[] | null> {
+    try {
+      const indexDoc = await getDoc(getUserOrgIndexDoc(userId))
+      if (indexDoc.exists()) {
+        return indexDoc.data().orgIds || null
+      }
+      return null
+    } catch {
+      return null
+    }
   }
 
   static async getUser(userId: string, orgId?: string): Promise<User | null> {
@@ -551,7 +641,8 @@ export class FirestoreService {
     const sessionsQuery = query(
       getSessionCollection(),
       where('organizationId', '==', orgId),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'desc'),
+      limit(100)
     )
 
     return onSnapshot(sessionsQuery, (snapshot) => {
@@ -564,6 +655,30 @@ export class FirestoreService {
       })) as GameSession[]
       callback(sessions)
     })
+  }
+
+  static async getOrganizationSessionsPage(
+    orgId: string,
+    pageSize: number,
+    lastSession?: GameSession
+  ): Promise<GameSession[]> {
+    const constraints = [
+      where('organizationId', '==', orgId),
+      orderBy('createdAt', 'desc'),
+      limit(pageSize)
+    ]
+    if (lastSession?.createdAt) {
+      constraints.push(startAfter(lastSession.createdAt))
+    }
+    const sessionsQuery = query(getSessionCollection(), ...constraints)
+    const snapshot = await getDocs(sessionsQuery)
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      startTime: doc.data().startTime?.toDate(),
+      endTime: doc.data().endTime?.toDate()
+    })) as GameSession[]
   }
 
   // Real-time subscriptions

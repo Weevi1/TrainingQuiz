@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
-import { Clock, Users, Star, Zap, Target, Trophy, CheckCircle, XCircle, AlertTriangle, Loader, Pause } from 'lucide-react'
-import { FirestoreService, type GameSession, type Quiz, type Question, type Participant, type Organization, type OrganizationBranding, type InterstitialConfig } from '../lib/firestore'
+import { Clock, Users, Star, Zap, Target, Trophy, CheckCircle, XCircle, AlertTriangle, Loader, Pause, Crown } from 'lucide-react'
+import { FirestoreService, type GameSession, type Quiz, type Question, type Participant, type Organization, type OrganizationBranding, type InterstitialConfig, type MilestoneType } from '../lib/firestore'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { GameDispatcher } from '../components/gameModules/GameDispatcher'
 import { InterstitialOverlay } from '../components/InterstitialOverlay'
@@ -11,10 +11,61 @@ import { SoundControl } from '../components/SoundControl'
 import { ReactionOverlay } from '../components/ReactionOverlay'
 import { visualEffects } from '../lib/visualEffects'
 import { applyOrganizationBranding } from '../lib/applyBranding'
+import { serverNow } from '../lib/timerSync'
+import { getOrganizationCached } from '../lib/orgCache'
 
 // Session persistence key and timeout (2 hours)
 const SESSION_STORAGE_KEY = 'traind_session_recovery'
 const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000 // 2 hours
+
+/** Preload all quiz media into browser cache during waiting room */
+const preloadQuizMedia = (quiz: Quiz) => {
+  const preloadVideo = (url: string) => {
+    const v = document.createElement('video')
+    v.preload = 'auto'
+    v.src = url
+    v.load()
+  }
+  const preloadAudio = (url: string) => {
+    const a = new Audio()
+    a.preload = 'auto'
+    a.src = url
+  }
+
+  // Slide interstitial media
+  const slides = (quiz.interstitials || []).filter(i => i.mode === 'slide')
+  for (const slide of slides) {
+    if (slide.slideImage) {
+      if (/\.(mp4|webm|mov)(\?|$)/i.test(slide.slideImage)) {
+        preloadVideo(slide.slideImage)
+      } else {
+        const img = new Image()
+        img.src = slide.slideImage
+      }
+    }
+    if (slide.slideAudio) preloadAudio(slide.slideAudio)
+  }
+
+  // Custom feedback media
+  if (quiz.customFeedback?.correctVideo) preloadVideo(quiz.customFeedback.correctVideo)
+  if (quiz.customFeedback?.correctAudio) preloadAudio(quiz.customFeedback.correctAudio)
+  if (quiz.customFeedback?.incorrectVideo) preloadVideo(quiz.customFeedback.incorrectVideo)
+  if (quiz.customFeedback?.incorrectAudio) preloadAudio(quiz.customFeedback.incorrectAudio)
+
+  // Milestone media
+  for (const m of quiz.milestones || []) {
+    if (m.enabled && m.video) preloadVideo(m.video)
+    if (m.enabled && m.audio) preloadAudio(m.audio)
+  }
+
+  // Boss question intro media
+  for (const q of quiz.questions) {
+    if (q.isBoss) {
+      if (q.bossIntroVideo) preloadVideo(q.bossIntroVideo)
+      if (q.bossIntroAudio) preloadAudio(q.bossIntroAudio)
+    }
+  }
+}
 
 interface GameState {
   currentQuestionIndex: number
@@ -134,9 +185,12 @@ export const PlaySession: React.FC = () => {
     return () => unsubscribe()
   }, [sessionState?.sessionId])
 
-  // Subscribe to participant count
+  // Participant count for waiting room — use lightweight count query instead of
+  // downloading all participant documents (saves bandwidth with 50 participants)
   useEffect(() => {
     if (!sessionState?.sessionId) return
+    // Only subscribe while in waiting room; active quiz has its own subscription
+    if (session && session.status !== 'waiting' && session.status !== 'countdown') return
 
     const unsubscribe = FirestoreService.subscribeToSessionParticipants(
       sessionState.sessionId,
@@ -146,7 +200,7 @@ export const PlaySession: React.FC = () => {
     )
 
     return () => unsubscribe()
-  }, [sessionState?.sessionId])
+  }, [sessionState?.sessionId, session?.status])
 
   const loadSessionData = async () => {
     if (!sessionState) return
@@ -164,12 +218,13 @@ export const PlaySession: React.FC = () => {
 
       setSession(realSession)
 
-      // Load organization branding
+      // Load organization branding (cached from JoinSession, deduplicated)
       try {
-        const org = await FirestoreService.getOrganization(realSession.organizationId)
+        const org = await getOrganizationCached(realSession.organizationId)
         if (org) {
           setOrganization(org)
           await applyOrganizationBranding(org.branding)
+          if (org.name) document.title = `${org.name} - Trained`
         }
       } catch (error) {
         console.error('Error loading organization:', error)
@@ -183,6 +238,8 @@ export const PlaySession: React.FC = () => {
             const cachedQuiz = await FirestoreService.getQuiz(realSession.organizationId, quizId)
             if (cachedQuiz) {
               quizCacheRef.current = cachedQuiz
+              // Preload slide media (images/videos) into browser cache for instant display
+              preloadQuizMedia(cachedQuiz)
             }
           } catch (error) {
             // Non-critical — will fetch on demand when session starts
@@ -566,6 +623,15 @@ const LegacyQuizGame: React.FC<{
   const [showCelebration, setShowCelebration] = useState(false)
   const [trainerEndedMidQuestion, setTrainerEndedMidQuestion] = useState(false)
   const [showInterstitial, setShowInterstitial] = useState<InterstitialConfig | null>(null)
+  const [showMilestone, setShowMilestone] = useState<{ text: string; video?: string; audio?: string } | null>(null)
+  const [showBossIntro, setShowBossIntro] = useState<{ text: string; video?: string; audio?: string; multiplier: number } | null>(null)
+  // Track consecutive incorrect for losing3 milestone
+  const consecutiveWrongRef = useRef(0)
+  // Track if recovery is possible (had a miss streak, now recovering)
+  const hadMissStreakRef = useRef(false)
+  const recoveryCountRef = useRef(0)
+  // Track which milestones have already fired (each fires once per quiz)
+  const firedMilestonesRef = useRef<Set<string>>(new Set())
   // quizReady: false if there's a before-first-question interstitial to show first
   const [quizReady, setQuizReady] = useState(
     !quiz.interstitials?.some(i => i.beforeQuestionIndex === 0)
@@ -584,8 +650,9 @@ const LegacyQuizGame: React.FC<{
   const sessionEndedRef = useRef(false)
   const showingFinalResultsRef = useRef(false) // Mutex: prevents double invocation of showFinalResults
   // Anchor-based session timer: reads from Firestore session, syncs with presenter
+  // All devices use serverNow() so anchors are in server time — no skew correction needed
   const sessionTimerAnchorRef = useRef<number>(
-    (session as any)?.timerStartedAt || Date.now()
+    session.timerStartedAt || serverNow()
   )
   const sessionTimeLimitRef = useRef<number>(initialSessionTimeLimit)
   const timerPausedRef = useRef(false)
@@ -674,6 +741,7 @@ const LegacyQuizGame: React.FC<{
         }
 
         // Sync session timer anchor and limit from Firestore (source of truth)
+        // Anchor is in server time (trainer wrote it using serverNow())
         if (updatedSession.timerStartedAt) {
           sessionTimerAnchorRef.current = updatedSession.timerStartedAt
         }
@@ -687,7 +755,7 @@ const LegacyQuizGame: React.FC<{
           timerPausedRef.current = true
           setIsSessionPaused(true)
           pausedRemainingRef.current = updatedSession.pausedTimeRemaining
-            || Math.max(0, sessionTimeLimitRef.current - Math.floor((Date.now() - sessionTimerAnchorRef.current) / 1000))
+            || Math.max(0, sessionTimeLimitRef.current - Math.floor((serverNow() - sessionTimerAnchorRef.current) / 1000))
         } else if (!updatedSession.timerPaused && timerPausedRef.current) {
           // Presenter resumed - anchor already updated above from Firestore
           timerPausedRef.current = false
@@ -699,17 +767,16 @@ const LegacyQuizGame: React.FC<{
     return () => unsubscribe()
   }, [sessionState.sessionId])
 
-  // Live stats - subscribe to participants for ranking
+  // Live stats - poll participants every 10s for ranking (avoids N×N listener reads)
   useEffect(() => {
     if (!sessionState.sessionId) return
 
-    const unsubscribe = FirestoreService.subscribeToSessionParticipants(
-      sessionState.sessionId,
-      (participants) => {
+    const fetchRanking = async () => {
+      try {
+        const participants = await FirestoreService.getSessionParticipants(sessionState.sessionId)
         setAllParticipants(participants)
         setParticipantCount(participants.length)
 
-        // Calculate current rank based on score
         const sortedByScore = [...participants].sort((a, b) =>
           (b.gameState?.score || 0) - (a.gameState?.score || 0)
         )
@@ -717,10 +784,15 @@ const LegacyQuizGame: React.FC<{
         if (myIndex !== -1) {
           setCurrentRank(myIndex + 1)
         }
+      } catch (err) {
+        console.error('Error polling participant ranking:', err)
       }
-    )
+    }
 
-    return () => unsubscribe()
+    fetchRanking() // initial fetch
+    const interval = setInterval(fetchRanking, 10000)
+
+    return () => clearInterval(interval)
   }, [sessionState.sessionId, participantId])
 
   // Session persistence - save state periodically
@@ -757,7 +829,7 @@ const LegacyQuizGame: React.FC<{
           return
         }
 
-        const elapsed = Math.floor((Date.now() - sessionTimerAnchorRef.current) / 1000)
+        const elapsed = Math.floor((serverNow() - sessionTimerAnchorRef.current) / 1000)
         const remaining = Math.max(0, sessionTimeLimitRef.current - elapsed)
 
         setGameState(prev => {
@@ -802,16 +874,26 @@ const LegacyQuizGame: React.FC<{
     const timeSpent = Math.floor((Date.now() - questionStartTimeRef.current) / 1000)
     const isCorrect = answerIndex === question.correctAnswer
 
-    // Play sound effect based on answer result (phone only gets correct/incorrect)
-    // Also trigger visual effects on participant phone
+    // Play sound effect — use custom feedback audio if configured, otherwise built-in
+    const customFeedback = quiz.customFeedback
     if (isCorrect) {
-      soundSystem.play('correct')
+      if (customFeedback?.correctAudio) {
+        const audio = new Audio(customFeedback.correctAudio)
+        audio.play().catch(() => {})
+      } else {
+        soundSystem.play('correct')
+      }
       visualEffects.triggerScreenEffect('screen-flash', { color: '#4ade80' })
       if (state.streak >= 4) {
         visualEffects.triggerScreenEffect('particle-explosion')
       }
     } else {
-      soundSystem.play('incorrect')
+      if (customFeedback?.incorrectAudio) {
+        const audio = new Audio(customFeedback.incorrectAudio)
+        audio.play().catch(() => {})
+      } else {
+        soundSystem.play('incorrect')
+      }
       visualEffects.triggerScreenEffect('screen-flash', { color: '#ef4444' })
     }
 
@@ -822,8 +904,25 @@ const LegacyQuizGame: React.FC<{
       timeSpent,
     }
 
-    const newScore = state.score + (isCorrect ? 100 : 0)
+    // Boss questions award multiplied points
+    const basePoints = 100
+    const pointMultiplier = question.isBoss ? (question.bossPointMultiplier || 2) : 1
+    const newScore = state.score + (isCorrect ? basePoints * pointMultiplier : 0)
     const newStreak = isCorrect ? state.streak + 1 : 0
+
+    // Track consecutive wrong for milestones
+    if (isCorrect) {
+      consecutiveWrongRef.current = 0
+      if (hadMissStreakRef.current) {
+        recoveryCountRef.current++
+      }
+    } else {
+      consecutiveWrongRef.current++
+      recoveryCountRef.current = 0
+      if (consecutiveWrongRef.current >= 3) {
+        hadMissStreakRef.current = true
+      }
+    }
 
     // Update game state
     setGameState(prev => ({
@@ -832,24 +931,6 @@ const LegacyQuizGame: React.FC<{
       streak: newStreak,
       answers: [...prev.answers, answerRecord]
     }))
-
-    // Persist answer to Firestore (independent try/catches so one failure doesn't block the other)
-    try {
-      await FirestoreService.submitAnswer(
-        sessionState.sessionId,
-        participantId,
-        {
-          questionId: question.id,
-          questionIndex: state.currentQuestionIndex,
-          selectedAnswer: answerIndex ?? -1,
-          isCorrect,
-          timeSpent,
-          participantName: sessionState.participantName
-        }
-      )
-    } catch (error) {
-      console.error('Error persisting answer to answers collection:', error)
-    }
 
     // Update participant game state (critical for presenter to show scores)
     try {
@@ -871,12 +952,89 @@ const LegacyQuizGame: React.FC<{
     setShowResult(true)
 
     setTimeout(() => {
-      nextQuestion()
+      // Clear feedback overlay first, then advance
+      setShowResult(false)
+
+      // Check if a milestone was triggered
+      const milestone = detectMilestone(newStreak, state.answers.length + 1, quiz)
+      if (milestone) {
+        // Show milestone overlay — its onComplete will call nextQuestion()
+        setShowMilestone(milestone)
+      } else {
+        requestAnimationFrame(() => nextQuestion())
+      }
     }, 1500)
+  }
+
+  /** Detect if a milestone should fire based on current state */
+  const detectMilestone = (streak: number, answeredCount: number, quiz: Quiz): { text: string; video?: string; audio?: string } | null => {
+    const milestones = quiz.milestones?.filter(m => m.enabled)
+    if (!milestones?.length) return null
+
+    const totalQuestions = quiz.questions.length
+    const state = gameStateRef.current
+    const correctCount = state.answers.filter(a => a.isCorrect).length + (streak > 0 ? 0 : 0) // already updated
+    // Recalculate correct count from answers array (which was just updated)
+    const allAnswers = [...state.answers]
+    const lastAnswer = allAnswers[allAnswers.length - 1]
+    const totalCorrect = allAnswers.filter(a => a.isCorrect).length
+
+    const check = (type: MilestoneType): boolean => {
+      if (firedMilestonesRef.current.has(type)) return false
+      const config = milestones.find(m => m.type === type)
+      if (!config?.enabled) return false
+
+      switch (type) {
+        case 'streak3': return streak === 3
+        case 'streak5': return streak === 5
+        case 'streak10': return streak === 10
+        case 'losing3': return consecutiveWrongRef.current === 3
+        case 'halfway': return answeredCount === Math.ceil(totalQuestions / 2) && totalQuestions >= 4
+        case 'perfect_halfway':
+          return answeredCount >= Math.ceil(totalQuestions / 2) && totalCorrect === answeredCount && answeredCount > 1 && !firedMilestonesRef.current.has('perfect_halfway')
+        case 'recovery':
+          return hadMissStreakRef.current && recoveryCountRef.current === 3
+        default: return false
+      }
+    }
+
+    // Default texts for milestones
+    const defaults: Record<MilestoneType, string> = {
+      streak3: 'On Fire! 🔥',
+      streak5: 'Unstoppable! ⚡',
+      streak10: 'LEGENDARY! 🏆',
+      losing3: 'Keep going, you got this! 💪',
+      halfway: 'Halfway there! 🎯',
+      perfect_halfway: 'Perfect score so far! ⭐',
+      recovery: 'Great recovery! 🚀',
+    }
+
+    // Check each milestone type (priority order)
+    const types: MilestoneType[] = ['streak10', 'streak5', 'streak3', 'losing3', 'perfect_halfway', 'halfway', 'recovery']
+    for (const type of types) {
+      if (check(type)) {
+        firedMilestonesRef.current.add(type)
+        // For streaks, also mark lower streaks as fired so they don't fire later
+        if (type === 'streak10') { firedMilestonesRef.current.add('streak5'); firedMilestonesRef.current.add('streak3') }
+        if (type === 'streak5') { firedMilestonesRef.current.add('streak3') }
+        if (type === 'recovery') { hadMissStreakRef.current = false; recoveryCountRef.current = 0 }
+
+        const config = milestones.find(m => m.type === type)!
+        return {
+          text: config.text || defaults[type],
+          video: config.video,
+          audio: config.audio,
+        }
+      }
+    }
+
+    return null
   }
 
   const advanceToQuestion = (nextIndex: number) => {
     setShowInterstitial(null)
+    setShowMilestone(null)
+    setShowBossIntro(null)
     // Move to next question - track question start time for stats (session timer continues)
     questionStartTimeRef.current = Date.now()
     setCurrentQuestion(quiz.questions[nextIndex])
@@ -893,6 +1051,7 @@ const LegacyQuizGame: React.FC<{
     setShowResult(false)
   }
 
+  /** Proceed to next question, checking interstitials and boss intros along the way */
   const nextQuestion = () => {
     if (!quiz) return
 
@@ -906,11 +1065,28 @@ const LegacyQuizGame: React.FC<{
       return
     }
 
-    // Check for interstitial before the next question
+    // Chain: interstitial → boss intro → advance
+    // Step 1: Check for interstitial before the next question
     const interstitial = quiz.interstitials?.find(i => i.beforeQuestionIndex === nextIndex)
     if (interstitial) {
       setShowInterstitial(interstitial)
-      // InterstitialOverlay's onComplete will call advanceToQuestion(nextIndex)
+      // InterstitialOverlay's onComplete will call checkBossIntroThenAdvance(nextIndex)
+    } else {
+      checkBossIntroThenAdvance(nextIndex)
+    }
+  }
+
+  /** After interstitials clear, check if next question is a boss question */
+  const checkBossIntroThenAdvance = (nextIndex: number) => {
+    const nextQ = quiz.questions[nextIndex]
+    if (nextQ?.isBoss) {
+      setShowBossIntro({
+        text: nextQ.bossIntroText || 'BONUS ROUND!',
+        video: nextQ.bossIntroVideo,
+        audio: nextQ.bossIntroAudio,
+        multiplier: nextQ.bossPointMultiplier || 2,
+      })
+      // BossIntro overlay's onComplete will call advanceToQuestion(nextIndex)
     } else {
       advanceToQuestion(nextIndex)
     }
@@ -1121,10 +1297,38 @@ const LegacyQuizGame: React.FC<{
               setQuizReady(true)
               setShowInterstitial(null)
             } else {
-              // Between-question interstitial — advance to the next question
+              // Between-question interstitial — then check boss intro before advancing
+              setShowInterstitial(null)
               const nextIdx = gameStateRef.current.currentQuestionIndex + 1
-              advanceToQuestion(nextIdx)
+              checkBossIntroThenAdvance(nextIdx)
             }
+          }}
+        />
+      )}
+
+      {/* Milestone celebration/encouragement overlay */}
+      {showMilestone && (
+        <MilestoneOverlay
+          text={showMilestone.text}
+          video={showMilestone.video}
+          audio={showMilestone.audio}
+          onComplete={() => {
+            setShowMilestone(null)
+            requestAnimationFrame(() => nextQuestion())
+          }}
+        />
+      )}
+
+      {/* Boss question intro overlay */}
+      {showBossIntro && (
+        <BossIntroOverlay
+          text={showBossIntro.text}
+          video={showBossIntro.video}
+          audio={showBossIntro.audio}
+          multiplier={showBossIntro.multiplier}
+          onComplete={() => {
+            const nextIdx = gameStateRef.current.currentQuestionIndex + 1
+            advanceToQuestion(nextIdx)
           }}
         />
       )}
@@ -1255,9 +1459,19 @@ const LegacyQuizGame: React.FC<{
           style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
         >
           <div className="flex justify-between items-center mb-3">
-            <span className="font-bold text-lg" style={{ color: 'var(--text-color)' }}>
-              Question {gameState.currentQuestionIndex + 1} of {gameState.totalQuestions}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-lg" style={{ color: 'var(--text-color)' }}>
+                Question {gameState.currentQuestionIndex + 1} of {gameState.totalQuestions}
+              </span>
+              {currentQuestion.isBoss && (
+                <span
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold"
+                  style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}
+                >
+                  <Crown size={12} /> {currentQuestion.bossPointMultiplier || 2}x
+                </span>
+              )}
+            </div>
             <span
               className="font-bold"
               style={{ color: 'var(--primary-color)' }}
@@ -1430,46 +1644,61 @@ const LegacyQuizGame: React.FC<{
       </main>
 
       {/* Quick answer feedback overlay (with optional reaction animation) */}
-      <ReactionOverlay
-        type={selectedAnswer === currentQuestion.correctAnswer ? 'correct' : 'incorrect'}
-        reactions={reactions}
-        visible={showResult}
-      >
-        <div
-          className="text-center p-6 rounded-2xl border-4 max-w-xs mx-4"
-          style={{
-            backgroundColor: selectedAnswer === currentQuestion.correctAnswer
-              ? 'var(--success-light-color)'
-              : 'var(--error-light-color)',
-            borderColor: selectedAnswer === currentQuestion.correctAnswer
-              ? 'var(--success-color)'
-              : 'var(--error-color)',
-            animation: 'scale-in 0.2s ease-out'
-          }}
-        >
-          <div className="text-5xl mb-2">
-            {selectedAnswer === currentQuestion.correctAnswer ? '✓' : '✗'}
-          </div>
-          <h2
-            className="text-2xl font-bold"
-            style={{
-              color: selectedAnswer === currentQuestion.correctAnswer
-                ? 'var(--success-color)'
-                : 'var(--error-color)'
-            }}
+      {(() => {
+        const isCorrect = selectedAnswer === currentQuestion.correctAnswer
+        const customVideo = isCorrect ? quiz.customFeedback?.correctVideo : quiz.customFeedback?.incorrectVideo
+        return (
+          <ReactionOverlay
+            type={isCorrect ? 'correct' : 'incorrect'}
+            reactions={customVideo ? undefined : reactions}
+            visible={showResult}
           >
-            {selectedAnswer === currentQuestion.correctAnswer ? 'Correct!' : 'Incorrect'}
-          </h2>
-          {selectedAnswer === currentQuestion.correctAnswer && gameState.streak > 1 && (
-            <p
-              className="text-base font-bold flex items-center justify-center gap-1 mt-1"
-              style={{ color: 'var(--streak-color, #f97316)' }}
+            {/* Custom feedback video replaces the icon */}
+            {customVideo && (
+              <video
+                src={customVideo}
+                autoPlay
+                muted
+                playsInline
+                className="max-w-[200px] max-h-[200px] rounded-2xl mb-2 mx-auto object-contain"
+              />
+            )}
+            <div
+              className="text-center p-6 rounded-2xl border-4 max-w-xs mx-4"
+              style={{
+                backgroundColor: isCorrect ? 'var(--success-light-color)' : 'var(--error-light-color)',
+                borderColor: isCorrect ? 'var(--success-color)' : 'var(--error-color)',
+                animation: 'scale-in 0.2s ease-out'
+              }}
             >
-              <Zap size={16} /> {gameState.streak} streak
-            </p>
-          )}
-        </div>
-      </ReactionOverlay>
+              {!customVideo && (
+                <div className="text-5xl mb-2">
+                  {isCorrect ? '✓' : '✗'}
+                </div>
+              )}
+              <h2
+                className="text-2xl font-bold"
+                style={{ color: isCorrect ? 'var(--success-color)' : 'var(--error-color)' }}
+              >
+                {isCorrect ? 'Correct!' : 'Incorrect'}
+                {currentQuestion.isBoss && isCorrect && (
+                  <span className="block text-lg mt-1" style={{ color: '#f59e0b' }}>
+                    {currentQuestion.bossPointMultiplier || 2}x points!
+                  </span>
+                )}
+              </h2>
+              {isCorrect && gameState.streak > 1 && (
+                <p
+                  className="text-base font-bold flex items-center justify-center gap-1 mt-1"
+                  style={{ color: 'var(--streak-color, #f97316)' }}
+                >
+                  <Zap size={16} /> {gameState.streak} streak
+                </p>
+              )}
+            </div>
+          </ReactionOverlay>
+        )
+      })()}
 
       {/* Pause overlay */}
       {isSessionPaused && !showResult && !sessionEnded && (
@@ -1514,6 +1743,185 @@ const LegacyQuizGame: React.FC<{
 
       {/* Floating Sound Control */}
       <SoundControl position="bottom-right" minimal={true} />
+    </div>
+  )
+}
+
+// --- Milestone Overlay (brief celebration/encouragement between questions) ---
+
+const MilestoneOverlay: React.FC<{
+  text: string
+  video?: string
+  audio?: string
+  onComplete: () => void
+}> = ({ text, video, audio, onComplete }) => {
+  const completedRef = useRef(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  useEffect(() => {
+    if (audio) {
+      const a = new Audio(audio)
+      audioRef.current = a
+      a.play().catch(() => {})
+    }
+
+    const timer = setTimeout(() => {
+      if (!completedRef.current) {
+        completedRef.current = true
+        if (audioRef.current) audioRef.current.pause()
+        onComplete()
+      }
+    }, 2500)
+
+    return () => {
+      clearTimeout(timer)
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = '' }
+    }
+  }, [])
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(0, 0, 0, 0.8)' }}
+      onClick={() => {
+        if (!completedRef.current) {
+          completedRef.current = true
+          if (audioRef.current) audioRef.current.pause()
+          onComplete()
+        }
+      }}
+    >
+      <div className="text-center max-w-sm mx-4" style={{ animation: 'milestone-pop 0.5s ease-out both' }}>
+        {video && (
+          <video
+            src={video}
+            autoPlay
+            muted
+            playsInline
+            className="max-w-[240px] max-h-[240px] rounded-2xl mx-auto mb-4 object-contain"
+          />
+        )}
+        <h1
+          className="text-3xl md:text-4xl font-bold text-white leading-tight"
+          style={{ textShadow: '0 2px 20px rgba(0,0,0,0.5)' }}
+        >
+          {text}
+        </h1>
+        <div className="mt-6 w-32 h-1.5 bg-white/20 rounded-full overflow-hidden mx-auto">
+          <div className="h-full bg-white/70 rounded-full" style={{ animation: 'milestone-progress 2.5s linear forwards' }} />
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes milestone-pop {
+          0% { transform: scale(0.3); opacity: 0; }
+          60% { transform: scale(1.1); opacity: 1; }
+          100% { transform: scale(1); }
+        }
+        @keyframes milestone-progress {
+          0% { width: 0%; }
+          100% { width: 100%; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+// --- Boss Question Intro Overlay ---
+
+const BossIntroOverlay: React.FC<{
+  text: string
+  video?: string
+  audio?: string
+  multiplier: number
+  onComplete: () => void
+}> = ({ text, video, audio, multiplier, onComplete }) => {
+  const completedRef = useRef(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  useEffect(() => {
+    if (audio) {
+      const a = new Audio(audio)
+      audioRef.current = a
+      a.play().catch(() => {})
+    }
+
+    const timer = setTimeout(() => {
+      if (!completedRef.current) {
+        completedRef.current = true
+        if (audioRef.current) audioRef.current.pause()
+        onComplete()
+      }
+    }, 3000)
+
+    return () => {
+      clearTimeout(timer)
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = '' }
+    }
+  }, [])
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'radial-gradient(ellipse at center, rgba(245, 158, 11, 0.3) 0%, rgba(0,0,0,0.9) 70%)' }}
+    >
+      <div className="text-center max-w-sm mx-4" style={{ animation: 'boss-entrance 0.8s ease-out both' }}>
+        {video && (
+          <video
+            src={video}
+            autoPlay
+            muted
+            playsInline
+            className="max-w-[280px] max-h-[280px] rounded-2xl mx-auto mb-4 object-contain"
+          />
+        )}
+        {!video && (
+          <div className="text-7xl mb-4" style={{ animation: 'boss-crown 0.6s ease-out 0.3s both' }}>
+            👑
+          </div>
+        )}
+        <h1
+          className="text-4xl md:text-5xl font-black text-white leading-tight mb-3"
+          style={{ textShadow: '0 0 30px rgba(245, 158, 11, 0.5), 0 2px 20px rgba(0,0,0,0.5)' }}
+        >
+          {text}
+        </h1>
+        <div
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-lg font-bold"
+          style={{
+            backgroundColor: 'rgba(245, 158, 11, 0.2)',
+            color: '#fbbf24',
+            border: '2px solid rgba(245, 158, 11, 0.4)',
+            animation: 'boss-badge 0.5s ease-out 0.5s both'
+          }}
+        >
+          {multiplier}x POINTS
+        </div>
+        <div className="mt-6 w-40 h-1.5 bg-white/20 rounded-full overflow-hidden mx-auto">
+          <div className="h-full rounded-full" style={{ backgroundColor: '#f59e0b', animation: 'milestone-progress 3s linear forwards' }} />
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes boss-entrance {
+          0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+          60% { transform: scale(1.15) rotate(2deg); opacity: 1; }
+          100% { transform: scale(1) rotate(0deg); }
+        }
+        @keyframes boss-crown {
+          0% { transform: translateY(-40px) scale(0); opacity: 0; }
+          60% { transform: translateY(5px) scale(1.3); opacity: 1; }
+          100% { transform: translateY(0) scale(1); }
+        }
+        @keyframes boss-badge {
+          0% { transform: scale(0); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes milestone-progress {
+          0% { width: 0%; }
+          100% { width: 100%; }
+        }
+      `}</style>
     </div>
   )
 }

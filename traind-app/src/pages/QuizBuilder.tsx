@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Plus, Trash2, Save, ArrowLeft, Edit, Move, Globe, Lock, Sparkles, Music, X, Zap, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, Trash2, Save, ArrowLeft, Edit, Move, Globe, Lock, Sparkles, Music, X, Zap, ChevronDown, ChevronUp, Layers, ToggleLeft, ToggleRight, Upload, Loader2, Volume2, Crown, Target, Trophy } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { OrgLogo } from '../components/OrgLogo'
-import { FirestoreService, type Question, type Quiz, type InterstitialConfig, type MediaItem, isPublished } from '../lib/firestore'
+import { FirestoreService, type Question, type Quiz, type InterstitialConfig, type MediaItem, type CustomFeedbackConfig, type MilestoneConfig, type MilestoneType, isPublished } from '../lib/firestore'
+import { StorageService } from '../lib/storageService'
+import { needsConversion, isVideoFile, convertToMp4 } from '../lib/mediaConverter'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { INTERSTITIAL_SOUND_OPTIONS, calculateTemplatePositions } from '../lib/interstitialPresets'
 import { BUILT_IN_ANIMATIONS, getBuiltInAnimation } from '../lib/builtInAnimations'
@@ -30,7 +32,8 @@ export const QuizBuilder: React.FC = () => {
       passingScore: 70,
       cpdEnabled: false,
       cpdPoints: 1,
-      cpdRequiresPass: false
+      cpdRequiresPass: false,
+      cpdVerifiable: false
     }
   })
 
@@ -177,9 +180,20 @@ export const QuizBuilder: React.FC = () => {
               ? i.beforeQuestionIndex - 1
               : i.beforeQuestionIndex
           }))
-        return { ...prev, questions: newQuestions, interstitials: newInterstitials.length > 0 ? newInterstitials : undefined }
+        return { ...prev, questions: newQuestions, interstitials: newInterstitials }
       })
     }
+  }
+
+  // Remap interstitial indices when questions are swapped/moved
+  const remapInterstitials = (interstitials: InterstitialConfig[] | undefined, fromIdx: number, toIdx: number) => {
+    if (!interstitials?.length) return interstitials
+    return interstitials.map(i => {
+      let idx = i.beforeQuestionIndex
+      if (idx === fromIdx) idx = toIdx
+      else if (idx === toIdx) idx = fromIdx
+      return { ...i, beforeQuestionIndex: idx }
+    })
   }
 
   const moveQuestion = (questionId: string, direction: 'up' | 'down') => {
@@ -189,8 +203,10 @@ export const QuizBuilder: React.FC = () => {
 
       if (direction === 'up' && index > 0) {
         [questions[index], questions[index - 1]] = [questions[index - 1], questions[index]]
+        return { ...prev, questions, interstitials: remapInterstitials(prev.interstitials, index, index - 1) }
       } else if (direction === 'down' && index < questions.length - 1) {
         [questions[index], questions[index + 1]] = [questions[index + 1], questions[index]]
+        return { ...prev, questions, interstitials: remapInterstitials(prev.interstitials, index, index + 1) }
       }
 
       return { ...prev, questions }
@@ -206,7 +222,21 @@ export const QuizBuilder: React.FC = () => {
       if (target === currentIndex) return prev
       const [moved] = questions.splice(currentIndex, 1)
       questions.splice(target, 0, moved)
-      return { ...prev, questions }
+      // Rebuild interstitial indices: shift indices affected by the splice
+      const newInterstitials = prev.interstitials?.map(i => {
+        let idx = i.beforeQuestionIndex
+        if (idx === currentIndex) {
+          idx = target
+        } else if (currentIndex < target) {
+          // Moved forward: indices between (current, target] shift down by 1
+          if (idx > currentIndex && idx <= target) idx--
+        } else {
+          // Moved backward: indices between [target, current) shift up by 1
+          if (idx >= target && idx < currentIndex) idx++
+        }
+        return { ...i, beforeQuestionIndex: idx }
+      })
+      return { ...prev, questions, interstitials: newInterstitials }
     })
   }
 
@@ -278,6 +308,24 @@ export const QuizBuilder: React.FC = () => {
     }))
   }
 
+  const addSlide = (beforeIndex?: number) => {
+    const idx = beforeIndex ?? quiz.questions.length
+    // Don't add two interstitials at the same position
+    if (quiz.interstitials?.some(i => i.beforeQuestionIndex === idx)) return
+    const newSlide: InterstitialConfig = {
+      id: `slide_${Date.now()}`,
+      beforeQuestionIndex: idx,
+      mode: 'slide',
+      slideTitle: '',
+      slideBody: '',
+      slideAutoAdvance: false,
+    }
+    setQuiz(prev => ({
+      ...prev,
+      interstitials: [...(prev.interstitials || []), newSlide]
+    }))
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -291,7 +339,7 @@ export const QuizBuilder: React.FC = () => {
       {/* Header */}
       <header className="bg-surface border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-20">
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => navigate('/dashboard')}
@@ -302,7 +350,7 @@ export const QuizBuilder: React.FC = () => {
               <OrgLogo
                 logo={currentOrganization?.branding?.logo}
                 orgName={currentOrganization?.name}
-                size="sm"
+                size="md"
               />
               <h1 className="text-xl font-bold text-primary">
                 {isEditing ? 'Edit Quiz' : 'Create Quiz'}
@@ -456,11 +504,47 @@ export const QuizBuilder: React.FC = () => {
                         : 'All participants who complete the session earn CPD points'}
                     </p>
                   </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">CPD Verification</label>
+                    <select
+                      value={quiz.settings.cpdVerifiable ? 'verifiable' : 'non-verifiable'}
+                      onChange={(e) => setQuiz(prev => ({
+                        ...prev,
+                        settings: { ...prev.settings, cpdVerifiable: e.target.value === 'verifiable' }
+                      }))}
+                      className="input"
+                    >
+                      <option value="non-verifiable">Non-Verifiable</option>
+                      <option value="verifiable">Verifiable</option>
+                    </select>
+                    <p className="text-sm text-text-secondary mt-1">
+                      {quiz.settings.cpdVerifiable
+                        ? 'CPD points are independently verifiable by a professional body'
+                        : 'CPD points are self-declared and not independently verified'}
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         </div>
+
+        {/* Custom Answer Feedback */}
+        <CustomFeedbackEditor
+          quizId={quizId || 'new'}
+          orgId={currentOrganization?.id || ''}
+          config={quiz.customFeedback}
+          onChange={(customFeedback) => setQuiz(prev => ({ ...prev, customFeedback }))}
+        />
+
+        {/* Milestone Triggers */}
+        <MilestoneEditor
+          quizId={quizId || 'new'}
+          orgId={currentOrganization?.id || ''}
+          milestones={quiz.milestones}
+          onChange={(milestones) => setQuiz(prev => ({ ...prev, milestones }))}
+        />
 
         {/* Questions */}
         <div className="card">
@@ -480,6 +564,13 @@ export const QuizBuilder: React.FC = () => {
                 </button>
               )}
             </div>
+            <button
+              onClick={() => addSlide()}
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg border border-border text-text-secondary hover:text-primary hover:border-primary transition-colors text-sm"
+            >
+              <Layers size={16} />
+              <span>Add Slide</span>
+            </button>
             <button
               onClick={addQuestion}
               className="btn-primary flex items-center space-x-2"
@@ -507,6 +598,7 @@ export const QuizBuilder: React.FC = () => {
                   <InterstitialSlot
                     interstitial={(quiz.interstitials || []).find(i => i.beforeQuestionIndex === index)}
                     onAdd={(animId, animType) => addInterstitial(index, animId, animType)}
+                    onAddSlide={() => addSlide(index)}
                     onUpdate={(id, updates) => updateInterstitial(id, updates)}
                     onDelete={(id) => deleteInterstitial(id)}
                     label={index === 0 ? 'Before first question' : `Between Q${index} and Q${index + 1}`}
@@ -566,6 +658,7 @@ const QuestionEditor: React.FC<QuestionEditorProps> = ({
           className="flex items-center space-x-2 font-medium"
         >
           <span>Question {index + 1}</span>
+          {question.isBoss && <Crown size={14} style={{ color: '#f59e0b' }} />}
           <Edit size={16} />
         </button>
         <div className="flex items-center space-x-2">
@@ -695,16 +788,66 @@ const QuestionEditor: React.FC<QuestionEditorProps> = ({
               placeholder="Explain why this is the correct answer..."
             />
           </div>
+
+          {/* Boss Question Toggle */}
+          <div className="pt-3 border-t border-border">
+            <button
+              onClick={() => onUpdate({ isBoss: !question.isBoss })}
+              className="flex items-center gap-2 text-sm"
+            >
+              {question.isBoss ? (
+                <ToggleRight size={20} style={{ color: '#f59e0b' }} />
+              ) : (
+                <ToggleLeft size={20} className="text-text-secondary" />
+              )}
+              <Crown size={14} style={{ color: question.isBoss ? '#f59e0b' : undefined }} className={question.isBoss ? '' : 'text-text-secondary'} />
+              <span className={question.isBoss ? 'font-medium' : 'text-text-secondary'}>Boss Question</span>
+              {question.isBoss && (
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                  {question.bossPointMultiplier || 2}x points
+                </span>
+              )}
+            </button>
+            {question.isBoss && (
+              <div className="mt-3 ml-7 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Point Multiplier</label>
+                    <select
+                      value={question.bossPointMultiplier || 2}
+                      onChange={(e) => onUpdate({ bossPointMultiplier: parseInt(e.target.value) })}
+                      className="input text-sm"
+                    >
+                      <option value={2}>2x points</option>
+                      <option value={3}>3x points</option>
+                      <option value={5}>5x points</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Intro Text</label>
+                    <input
+                      type="text"
+                      value={question.bossIntroText || ''}
+                      onChange={(e) => onUpdate({ bossIntroText: e.target.value })}
+                      className="input text-sm"
+                      placeholder="BONUS ROUND!"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-// Interstitial Slot Component — shows between question cards with animation gallery picker
+// Interstitial Slot Component — shows between question cards with animation gallery picker or slide editor
 interface InterstitialSlotProps {
   interstitial?: InterstitialConfig
   onAdd: (animationId: string, animationType: 'builtin' | 'custom') => void
+  onAddSlide: () => void
   onUpdate: (id: string, updates: Partial<InterstitialConfig>) => void
   onDelete: (id: string) => void
   label: string
@@ -715,6 +858,7 @@ interface InterstitialSlotProps {
 const InterstitialSlot: React.FC<InterstitialSlotProps> = ({
   interstitial,
   onAdd,
+  onAddSlide,
   onUpdate,
   onDelete,
   label,
@@ -727,17 +871,25 @@ const InterstitialSlot: React.FC<InterstitialSlotProps> = ({
   const hasAnimations = enabledBuiltIns.length > 0 || customAnimations.length > 0
 
   if (!interstitial) {
-    if (!hasAnimations) return null // No animations available — hide slot
-
     return (
-      <div className="flex items-center justify-center py-1 relative">
+      <div className="flex items-center justify-center py-1 relative gap-2">
+        {hasAnimations && (
+          <button
+            onClick={() => setShowGallery(!showGallery)}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full border border-dashed border-border text-text-secondary text-xs hover:text-primary hover:border-primary transition-colors"
+            title={label}
+          >
+            <Sparkles size={12} />
+            Animation
+          </button>
+        )}
         <button
-          onClick={() => setShowGallery(!showGallery)}
+          onClick={onAddSlide}
           className="flex items-center gap-1.5 px-3 py-1 rounded-full border border-dashed border-border text-text-secondary text-xs hover:text-primary hover:border-primary transition-colors"
-          title={label}
+          title={`Add slide break ${label.toLowerCase()}`}
         >
-          <Sparkles size={12} />
-          Add animation break
+          <Layers size={12} />
+          Slide
         </button>
 
         {/* Gallery popover */}
@@ -792,9 +944,121 @@ const InterstitialSlot: React.FC<InterstitialSlotProps> = ({
     )
   }
 
-  // Resolve animation label for display
+  const isSlide = interstitial.mode === 'slide'
+
+  // --- Slide mode display ---
+  if (isSlide) {
+    return (
+      <div className="border border-dashed rounded-lg overflow-hidden" style={{ borderColor: 'var(--primary-color, #3b82f6)' }}>
+        <div
+          className="flex items-center justify-between px-3 py-2 cursor-pointer"
+          style={{ backgroundColor: 'rgba(59, 130, 246, 0.06)' }}
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <Layers size={14} className="text-primary flex-shrink-0" />
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--primary-color)', color: 'var(--text-on-primary-color)', fontSize: '0.65rem' }}>
+              Slide
+            </span>
+            <span className="text-sm text-text-secondary truncate">
+              {interstitial.slideTitle || '(untitled slide)'}
+            </span>
+            {interstitial.slideAudio && <Volume2 size={12} className="text-text-secondary flex-shrink-0" />}
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(interstitial.id) }}
+              className="p-1 hover:opacity-80"
+              style={{ color: 'var(--error-color, #dc2626)' }}
+            >
+              <X size={14} />
+            </button>
+            {isExpanded ? <ChevronUp size={14} className="text-text-secondary" /> : <ChevronDown size={14} className="text-text-secondary" />}
+          </div>
+        </div>
+
+        {isExpanded && (
+          <div className="px-3 py-3 space-y-3 border-t" style={{ borderColor: 'rgba(59, 130, 246, 0.15)' }}>
+            <div>
+              <label className="block text-xs font-medium mb-1">Title</label>
+              <input
+                type="text"
+                value={interstitial.slideTitle || ''}
+                onChange={(e) => onUpdate(interstitial.id, { slideTitle: e.target.value })}
+                className="input text-sm"
+                placeholder="e.g. Section 2: Property Law"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Body Text</label>
+              <textarea
+                value={interstitial.slideBody || ''}
+                onChange={(e) => onUpdate(interstitial.id, { slideBody: e.target.value })}
+                className="input text-sm h-16 resize-none"
+                placeholder="Optional description or instructions..."
+              />
+            </div>
+            <SlideMediaUpload
+              slideId={interstitial.id}
+              currentUrl={interstitial.slideImage}
+              onUploaded={(url, durationSec) => onUpdate(interstitial.id, {
+                slideImage: url,
+                ...(durationSec ? { slideDurationSec: durationSec } : {})
+              })}
+              onRemove={() => onUpdate(interstitial.id, { slideImage: undefined, slideDurationSec: undefined })}
+            />
+            {/* Show video duration when detected */}
+            {interstitial.slideDurationSec && interstitial.slideDurationSec > 0 && (
+              <p className="text-xs text-text-secondary">
+                Animation duration: {interstitial.slideDurationSec}s
+              </p>
+            )}
+            {/* Audio layer — available when slide has media */}
+            {interstitial.slideImage && (
+              <SlideAudioUpload
+                slideId={interstitial.id}
+                currentUrl={interstitial.slideAudio}
+                onUploaded={(url) => onUpdate(interstitial.id, { slideAudio: url })}
+                onRemove={() => onUpdate(interstitial.id, { slideAudio: undefined })}
+              />
+            )}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => onUpdate(interstitial.id, { slideAutoAdvance: !interstitial.slideAutoAdvance })}
+                className="flex items-center gap-2 text-sm"
+              >
+                {interstitial.slideAutoAdvance ? (
+                  <ToggleRight size={20} className="text-primary" />
+                ) : (
+                  <ToggleLeft size={20} className="text-text-secondary" />
+                )}
+                <span>Auto-advance</span>
+              </button>
+              {interstitial.slideAutoAdvance && (
+                <select
+                  value={interstitial.slideAutoAdvanceMs || 5000}
+                  onChange={(e) => onUpdate(interstitial.id, { slideAutoAdvanceMs: parseInt(e.target.value) })}
+                  className="input text-sm w-24"
+                >
+                  <option value={3000}>3s</option>
+                  <option value={5000}>5s</option>
+                  <option value={7000}>7s</option>
+                  <option value={10000}>10s</option>
+                </select>
+              )}
+              {!interstitial.slideAutoAdvance && (
+                <span className="text-xs text-text-secondary">Tap to continue</span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // --- Animation mode display ---
   const animLabel = interstitial.animationType === 'builtin'
-    ? getBuiltInAnimation(interstitial.animationId)?.label || interstitial.animationId
+    ? getBuiltInAnimation(interstitial.animationId!)?.label || interstitial.animationId
     : customAnimations.find(a => a.id === interstitial.animationId)?.label || 'Custom'
   const customThumb = interstitial.animationType === 'custom'
     ? customAnimations.find(a => a.id === interstitial.animationId)?.thumbnailUrl
@@ -880,6 +1144,556 @@ const InterstitialSlot: React.FC<InterstitialSlotProps> = ({
                 <option value={5000}>5s</option>
               </select>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Slide media upload (image or video) ---
+
+const isVideoUrl = (url: string): boolean => /\.(mp4|webm|mov)(\?|$)/i.test(url)
+
+const SlideMediaUpload: React.FC<{
+  slideId: string
+  currentUrl?: string
+  onUploaded: (url: string, durationSec?: number) => void
+  onRemove: () => void
+}> = ({ slideId, currentUrl, onUploaded, onRemove }) => {
+  const { currentOrganization } = useAuth()
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = React.useState(false)
+  const [statusMsg, setStatusMsg] = React.useState('')
+  const [error, setError] = React.useState<string | null>(null)
+
+  /** Get duration of a video file in seconds */
+  const getVideoDuration = (file: File): Promise<number> => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video')
+      video.preload = 'metadata'
+      video.onloadedmetadata = () => {
+        resolve(Math.round(video.duration))
+        URL.revokeObjectURL(video.src)
+      }
+      video.onerror = () => {
+        resolve(0)
+        URL.revokeObjectURL(video.src)
+      }
+      video.src = URL.createObjectURL(file)
+    })
+  }
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !currentOrganization) return
+    setError(null)
+    setUploading(true)
+
+    try {
+      let uploadFile = file
+
+      // Convert GIF → MP4 via FFmpeg for smaller file + hardware decode
+      if (needsConversion(file)) {
+        setStatusMsg('Loading conversion engine...')
+        const result = await convertToMp4(file, {
+          maxWidth: 720, maxHeight: 720, maxDurationSec: 10, crf: 28, keepAudio: true,
+          onMessage: setStatusMsg
+        })
+        uploadFile = result.mp4
+      } else if (!isVideoFile(file) && !file.type.startsWith('image/')) {
+        throw new Error('Use an image (PNG, JPG, WebP) or video (MP4, GIF)')
+      }
+
+      // Detect video duration before uploading
+      const isVideo = uploadFile.type.startsWith('video/') || uploadFile.name.endsWith('.mp4')
+      let durationSec: number | undefined
+      if (isVideo) {
+        durationSec = await getVideoDuration(uploadFile)
+      }
+
+      setStatusMsg('Uploading...')
+      const url = await StorageService.uploadSlideMedia(currentOrganization.id, slideId, uploadFile)
+      onUploaded(url, durationSec || undefined)
+    } catch (err: any) {
+      setError(err.message || 'Upload failed')
+    } finally {
+      setUploading(false)
+      setStatusMsg('')
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium mb-1">Media (optional)</label>
+      {currentUrl ? (
+        <div className="relative inline-block">
+          {isVideoUrl(currentUrl) ? (
+            <video src={currentUrl} autoPlay muted loop playsInline className="max-h-28 rounded-lg object-contain" />
+          ) : (
+            <img src={currentUrl} alt="Slide" className="max-h-28 rounded-lg object-contain" />
+          )}
+          <button
+            onClick={onRemove}
+            className="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center"
+            style={{ backgroundColor: 'var(--error-color)', color: 'white' }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ) : (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,video/mp4"
+            onChange={handleFile}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+            style={{ backgroundColor: 'var(--surface-color)', border: '1px dashed var(--border-color)', color: 'var(--text-secondary-color)' }}
+          >
+            {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            {uploading ? (statusMsg || 'Processing...') : 'Upload image or video'}
+          </button>
+        </>
+      )}
+      {error && <p className="text-xs mt-1" style={{ color: 'var(--error-color)' }}>{error}</p>}
+    </div>
+  )
+}
+
+// --- Slide audio upload ---
+
+const SlideAudioUpload: React.FC<{
+  slideId: string
+  currentUrl?: string
+  onUploaded: (url: string) => void
+  onRemove: () => void
+}> = ({ slideId, currentUrl, onUploaded, onRemove }) => {
+  const { currentOrganization } = useAuth()
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !currentOrganization) return
+    setError(null)
+    setUploading(true)
+
+    try {
+      if (!file.type.startsWith('audio/')) {
+        throw new Error('Use an audio file (MP3, WAV, M4A, OGG)')
+      }
+      const url = await StorageService.uploadSlideAudio(currentOrganization.id, slideId, file)
+      onUploaded(url)
+    } catch (err: any) {
+      setError(err.message || 'Upload failed')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium mb-1">Audio Layer (optional)</label>
+      {currentUrl ? (
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
+            <Volume2 size={14} className="text-primary flex-shrink-0" />
+            <span className="text-text-secondary">Audio attached</span>
+            <audio src={currentUrl} controls className="h-7" style={{ maxWidth: '140px' }} />
+          </div>
+          <button
+            onClick={onRemove}
+            className="p-1 rounded hover:opacity-80"
+            style={{ color: 'var(--error-color)' }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg,audio/m4a,audio/aac"
+            onChange={handleFile}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+            style={{ backgroundColor: 'var(--surface-color)', border: '1px dashed var(--border-color)', color: 'var(--text-secondary-color)' }}
+          >
+            {uploading ? <Loader2 size={14} className="animate-spin" /> : <Volume2 size={14} />}
+            {uploading ? 'Uploading...' : 'Add audio'}
+          </button>
+        </>
+      )}
+      {error && <p className="text-xs mt-1" style={{ color: 'var(--error-color)' }}>{error}</p>}
+    </div>
+  )
+}
+
+// --- Generic media upload button (video or audio) ---
+
+const QuizMediaUpload: React.FC<{
+  label: string
+  currentUrl?: string
+  accept: string
+  orgId: string
+  quizId: string
+  storageKey: string
+  onUploaded: (url: string) => void
+  onRemove: () => void
+  isAudio?: boolean
+}> = ({ label, currentUrl, accept, orgId, quizId, storageKey, onUploaded, onRemove, isAudio }) => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = React.useState(false)
+  const [statusMsg, setStatusMsg] = React.useState('')
+  const [error, setError] = React.useState<string | null>(null)
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setError(null)
+    setUploading(true)
+
+    try {
+      let uploadFile = file
+
+      // Convert GIF/video via FFmpeg if needed (not for audio)
+      if (!isAudio && needsConversion(file)) {
+        setStatusMsg('Converting...')
+        const result = await convertToMp4(file, {
+          maxWidth: 480, maxHeight: 480, maxDurationSec: 5, crf: 28, keepAudio: true,
+          onMessage: setStatusMsg
+        })
+        uploadFile = result.mp4
+      }
+
+      setStatusMsg('Uploading...')
+      const url = await StorageService.uploadQuizMedia(orgId, quizId, storageKey, uploadFile)
+      onUploaded(url)
+    } catch (err: any) {
+      setError(err.message || 'Upload failed')
+    } finally {
+      setUploading(false)
+      setStatusMsg('')
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium mb-1">{label}</label>
+      {currentUrl ? (
+        <div className="flex items-center gap-2">
+          {isAudio ? (
+            <audio src={currentUrl} controls className="h-7" style={{ maxWidth: '160px' }} />
+          ) : (
+            <video src={currentUrl} autoPlay muted loop playsInline className="h-16 rounded-lg object-contain" />
+          )}
+          <button onClick={onRemove} className="p-1 rounded hover:opacity-80" style={{ color: 'var(--error-color)' }}>
+            <X size={14} />
+          </button>
+        </div>
+      ) : (
+        <>
+          <input ref={fileInputRef} type="file" accept={accept} onChange={handleFile} className="hidden" />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors"
+            style={{ backgroundColor: 'var(--surface-color)', border: '1px dashed var(--border-color)', color: 'var(--text-secondary-color)' }}
+          >
+            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            {uploading ? (statusMsg || 'Processing...') : 'Upload'}
+          </button>
+        </>
+      )}
+      {error && <p className="text-xs mt-1" style={{ color: 'var(--error-color)' }}>{error}</p>}
+    </div>
+  )
+}
+
+// --- Custom Answer Feedback Editor ---
+
+const CustomFeedbackEditor: React.FC<{
+  quizId: string
+  orgId: string
+  config?: CustomFeedbackConfig
+  onChange: (config: CustomFeedbackConfig | undefined) => void
+}> = ({ quizId, orgId, config, onChange }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false)
+  const hasAny = !!(config?.correctVideo || config?.correctAudio || config?.incorrectVideo || config?.incorrectAudio)
+
+  const update = (field: keyof CustomFeedbackConfig, value: string | undefined) => {
+    const next = { ...config, [field]: value }
+    // If all fields cleared, remove the config entirely
+    if (!next.correctVideo && !next.correctAudio && !next.incorrectVideo && !next.incorrectAudio) {
+      onChange(undefined)
+    } else {
+      onChange(next)
+    }
+  }
+
+  return (
+    <div className="card mb-8">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center justify-between w-full"
+      >
+        <div className="flex items-center gap-2">
+          <Target size={18} className="text-primary" />
+          <h2 className="text-lg font-bold">Custom Answer Feedback</h2>
+          {hasAny && <span className="text-xs px-2 py-0.5 rounded-full bg-primary text-white">Active</span>}
+        </div>
+        {isExpanded ? <ChevronUp size={16} className="text-text-secondary" /> : <ChevronDown size={16} className="text-text-secondary" />}
+      </button>
+      {!isExpanded && (
+        <p className="text-sm text-text-secondary mt-1">Replace the default correct/incorrect animations with custom videos and sounds</p>
+      )}
+
+      {isExpanded && (
+        <div className="mt-4 space-y-4">
+          <p className="text-sm text-text-secondary">
+            Upload custom animations and sounds to replace the default correct/incorrect feedback.
+            Videos play during the 1.5s feedback window. Keep them short and punchy.
+          </p>
+
+          {/* Correct feedback */}
+          <div className="p-3 rounded-lg" style={{ backgroundColor: 'rgba(34, 197, 94, 0.06)', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
+            <h4 className="text-sm font-medium mb-2" style={{ color: '#16a34a' }}>Correct Answer</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <QuizMediaUpload
+                label="Animation (video/GIF)"
+                currentUrl={config?.correctVideo}
+                accept="video/mp4,image/gif"
+                orgId={orgId}
+                quizId={quizId}
+                storageKey="feedback_correct"
+                onUploaded={(url) => update('correctVideo', url)}
+                onRemove={() => update('correctVideo', undefined)}
+              />
+              <QuizMediaUpload
+                label="Sound"
+                currentUrl={config?.correctAudio}
+                accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg"
+                orgId={orgId}
+                quizId={quizId}
+                storageKey="feedback_correct_audio"
+                onUploaded={(url) => update('correctAudio', url)}
+                onRemove={() => update('correctAudio', undefined)}
+                isAudio
+              />
+            </div>
+          </div>
+
+          {/* Incorrect feedback */}
+          <div className="p-3 rounded-lg" style={{ backgroundColor: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+            <h4 className="text-sm font-medium mb-2" style={{ color: '#dc2626' }}>Incorrect Answer</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <QuizMediaUpload
+                label="Animation (video/GIF)"
+                currentUrl={config?.incorrectVideo}
+                accept="video/mp4,image/gif"
+                orgId={orgId}
+                quizId={quizId}
+                storageKey="feedback_incorrect"
+                onUploaded={(url) => update('incorrectVideo', url)}
+                onRemove={() => update('incorrectVideo', undefined)}
+              />
+              <QuizMediaUpload
+                label="Sound"
+                currentUrl={config?.incorrectAudio}
+                accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg"
+                orgId={orgId}
+                quizId={quizId}
+                storageKey="feedback_incorrect_audio"
+                onUploaded={(url) => update('incorrectAudio', url)}
+                onRemove={() => update('incorrectAudio', undefined)}
+                isAudio
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Milestone Triggers Editor ---
+
+const MILESTONE_DEFAULTS: Record<MilestoneType, { label: string; description: string; defaultText: string; icon: string }> = {
+  streak3: { label: 'Hot Streak (3)', description: '3 correct in a row', defaultText: 'On Fire! 🔥', icon: '🔥' },
+  streak5: { label: 'Hot Streak (5)', description: '5 correct in a row', defaultText: 'Unstoppable! ⚡', icon: '⚡' },
+  streak10: { label: 'Hot Streak (10)', description: '10 correct in a row', defaultText: 'LEGENDARY! 🏆', icon: '🏆' },
+  losing3: { label: 'Encouragement', description: '3 incorrect in a row', defaultText: 'Keep going, you got this! 💪', icon: '💪' },
+  halfway: { label: 'Halfway', description: '50% of questions answered', defaultText: 'Halfway there! 🎯', icon: '🎯' },
+  perfect_halfway: { label: 'Perfect Run', description: '100% correct at halfway+', defaultText: 'Perfect score so far! ⭐', icon: '⭐' },
+  recovery: { label: 'Comeback', description: '3 correct after a miss streak', defaultText: 'Great recovery! 🚀', icon: '🚀' },
+}
+
+const ALL_MILESTONE_TYPES: MilestoneType[] = ['streak3', 'streak5', 'streak10', 'losing3', 'halfway', 'perfect_halfway', 'recovery']
+
+const MilestoneEditor: React.FC<{
+  quizId: string
+  orgId: string
+  milestones?: MilestoneConfig[]
+  onChange: (milestones: MilestoneConfig[] | undefined) => void
+}> = ({ quizId, orgId, milestones, onChange }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false)
+  const enabledCount = milestones?.filter(m => m.enabled).length || 0
+
+  const getMilestone = (type: MilestoneType): MilestoneConfig => {
+    return milestones?.find(m => m.type === type) || { type, enabled: false }
+  }
+
+  const updateMilestone = (type: MilestoneType, updates: Partial<MilestoneConfig>) => {
+    const existing = milestones || []
+    const idx = existing.findIndex(m => m.type === type)
+    let next: MilestoneConfig[]
+    if (idx >= 0) {
+      next = existing.map((m, i) => i === idx ? { ...m, ...updates } : m)
+    } else {
+      next = [...existing, { type, enabled: false, ...updates }]
+    }
+    // Remove disabled milestones with no custom media
+    next = next.filter(m => m.enabled || m.video || m.audio || m.text)
+    onChange(next.length > 0 ? next : undefined)
+  }
+
+  return (
+    <div className="card mb-8">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center justify-between w-full"
+      >
+        <div className="flex items-center gap-2">
+          <Trophy size={18} className="text-primary" />
+          <h2 className="text-lg font-bold">Milestone Triggers</h2>
+          {enabledCount > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-primary text-white">{enabledCount} active</span>}
+        </div>
+        {isExpanded ? <ChevronUp size={16} className="text-text-secondary" /> : <ChevronDown size={16} className="text-text-secondary" />}
+      </button>
+      {!isExpanded && (
+        <p className="text-sm text-text-secondary mt-1">Auto-celebrate streaks, comebacks, and milestones during the quiz</p>
+      )}
+
+      {isExpanded && (
+        <div className="mt-4 space-y-2">
+          <p className="text-sm text-text-secondary mb-3">
+            Celebrations and encouragement that trigger automatically based on participant performance.
+            Each shows a brief overlay (2s) before the next question.
+          </p>
+
+          {ALL_MILESTONE_TYPES.map(type => {
+            const meta = MILESTONE_DEFAULTS[type]
+            const config = getMilestone(type)
+            return (
+              <MilestoneRow
+                key={type}
+                type={type}
+                meta={meta}
+                config={config}
+                orgId={orgId}
+                quizId={quizId}
+                onUpdate={(updates) => updateMilestone(type, updates)}
+              />
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const MilestoneRow: React.FC<{
+  type: MilestoneType
+  meta: { label: string; description: string; defaultText: string; icon: string }
+  config: MilestoneConfig
+  orgId: string
+  quizId: string
+  onUpdate: (updates: Partial<MilestoneConfig>) => void
+}> = ({ type, meta, config, orgId, quizId, onUpdate }) => {
+  const [showDetail, setShowDetail] = React.useState(false)
+  const isEnabled = config.enabled
+
+  return (
+    <div
+      className="border rounded-lg overflow-hidden"
+      style={{ borderColor: isEnabled ? 'var(--primary-color)' : 'var(--border-color)' }}
+    >
+      <div className="flex items-center justify-between px-3 py-2">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="text-lg">{meta.icon}</span>
+          <div className="min-w-0">
+            <span className="text-sm font-medium">{meta.label}</span>
+            <span className="text-xs text-text-secondary ml-2">{meta.description}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {isEnabled && (
+            <button
+              onClick={() => setShowDetail(!showDetail)}
+              className="text-xs text-text-secondary hover:text-primary"
+            >
+              {showDetail ? 'Less' : 'Customize'}
+            </button>
+          )}
+          <button onClick={() => onUpdate({ enabled: !isEnabled })}>
+            {isEnabled ? (
+              <ToggleRight size={22} className="text-primary" />
+            ) : (
+              <ToggleLeft size={22} className="text-text-secondary" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {isEnabled && showDetail && (
+        <div className="px-3 pb-3 pt-1 border-t space-y-2" style={{ borderColor: 'var(--border-color)' }}>
+          <div>
+            <label className="block text-xs font-medium mb-1">Message</label>
+            <input
+              type="text"
+              value={config.text || ''}
+              onChange={(e) => onUpdate({ text: e.target.value || undefined })}
+              className="input text-sm"
+              placeholder={meta.defaultText}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <QuizMediaUpload
+              label="Animation"
+              currentUrl={config.video}
+              accept="video/mp4,image/gif"
+              orgId={orgId}
+              quizId={quizId}
+              storageKey={`milestone_${type}`}
+              onUploaded={(url) => onUpdate({ video: url })}
+              onRemove={() => onUpdate({ video: undefined })}
+            />
+            <QuizMediaUpload
+              label="Sound"
+              currentUrl={config.audio}
+              accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg"
+              orgId={orgId}
+              quizId={quizId}
+              storageKey={`milestone_${type}_audio`}
+              onUploaded={(url) => onUpdate({ audio: url })}
+              onRemove={() => onUpdate({ audio: undefined })}
+              isAudio
+            />
           </div>
         </div>
       )}
