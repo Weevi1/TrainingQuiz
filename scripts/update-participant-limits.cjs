@@ -12,7 +12,20 @@ const LIMITS = {
 
 async function main() {
   const db = admin.firestore()
-  const snapshot = await db.collection('organizations').get()
+  // Check both dev and production collections
+  const collections = ['dev-organizations', 'organizations']
+  for (const collName of collections) {
+    const snapshot = await db.collection(collName).get()
+    if (snapshot.empty) {
+      console.log(`  (${collName}: empty, skipping)`)
+      continue
+    }
+    console.log(`\nUpdating ${collName} (${snapshot.size} orgs):`)
+    await updateOrgs(snapshot)
+  }
+}
+
+async function updateOrgs(snapshot) {
 
   for (const doc of snapshot.docs) {
     const data = doc.data()
@@ -34,8 +47,12 @@ async function main() {
     console.log(`  UPD  ${data.name} (${doc.id}): ${currentLimit} → ${newLimit} (${plan})`)
   }
 
+}
+
+async function main2() {
+  await main()
   console.log('\nDone.')
   process.exit(0)
 }
 
-main().catch(e => { console.error(e); process.exit(1) })
+main2().catch(e => { console.error(e); process.exit(1) })
