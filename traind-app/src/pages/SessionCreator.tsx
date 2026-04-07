@@ -23,7 +23,7 @@ export const SessionCreator: React.FC = () => {
   const [session, setSession] = useState<Partial<GameSession>>({
     title: '',
     gameType: gameType || 'quiz',
-    participantLimit: 50,
+    participantLimit: 300,
     organizationId: currentOrganization?.id || '',
     trainerId: user?.id || '',
     code: '',

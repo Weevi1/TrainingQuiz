@@ -12,14 +12,14 @@ export const PLAN_PRICING = {
     interval: 'year' as const,
     modules: ['quiz', 'bingo'],
     limits: {
-      maxParticipants: 50,
+      maxParticipants: 300,
       maxSessions: 10,
       maxTrainers: 10
     },
     features: [
       'Interactive Quiz Module',
       'Training Bingo',
-      'Up to 50 participants per session',
+      'Up to 300 participants per session',
       '10 active sessions',
       '10 trainer accounts',
       'Basic analytics',
@@ -33,7 +33,7 @@ export const PLAN_PRICING = {
     interval: 'year' as const,
     modules: ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference'],
     limits: {
-      maxParticipants: 200,
+      maxParticipants: 500,
       maxSessions: 50,
       maxTrainers: 10
     },
@@ -42,7 +42,7 @@ export const PLAN_PRICING = {
       'Who Wants to be a Millionaire',
       'Speed Rounds',
       'Document Detective (Compliance)',
-      'Up to 200 participants per session',
+      'Up to 500 participants per session',
       '50 active sessions',
       '10 trainer accounts',
       'Advanced analytics',
@@ -57,13 +57,13 @@ export const PLAN_PRICING = {
     interval: 'year' as const,
     modules: ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference'],
     limits: {
-      maxParticipants: 1000,
+      maxParticipants: 2000,
       maxSessions: -1,    // unlimited
       maxTrainers: -1     // unlimited
     },
     features: [
       'All Professional features',
-      'Up to 1000 participants per session',
+      'Up to 2000 participants per session',
       'Unlimited sessions',
       'Unlimited trainers',
       'Premium analytics & reports',

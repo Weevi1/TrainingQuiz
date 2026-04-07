@@ -98,7 +98,7 @@ export const OrganizationSetup: React.FC = () => {
             ? ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference']
             : ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference'],
           limits: {
-            maxParticipants: orgData.plan === 'basic' ? 50 : orgData.plan === 'professional' ? 200 : 1000,
+            maxParticipants: orgData.plan === 'basic' ? 300 : orgData.plan === 'professional' ? 500 : 2000,
             maxSessions: orgData.plan === 'basic' ? 10 : orgData.plan === 'professional' ? 50 : -1,
             maxTrainers: orgData.plan === 'basic' ? 3 : orgData.plan === 'professional' ? 10 : -1
           },

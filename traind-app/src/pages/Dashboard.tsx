@@ -59,7 +59,7 @@ export const Dashboard: React.FC = () => {
                 ? ['quiz', 'bingo', 'millionaire', 'speedround']
                 : ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference'],
               limits: {
-                maxParticipants: plan === 'basic' ? 50 : plan === 'professional' ? 200 : -1,
+                maxParticipants: plan === 'basic' ? 300 : plan === 'professional' ? 500 : -1,
                 maxSessions: -1,
                 maxTrainers: plan === 'basic' ? 3 : plan === 'professional' ? 10 : -1
               }

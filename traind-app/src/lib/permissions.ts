@@ -37,7 +37,7 @@ export const SUBSCRIPTION_PLANS = {
     name: 'Basic',
     modules: ['quiz', 'bingo'] as ModuleType[],
     limits: {
-      maxParticipants: 50,
+      maxParticipants: 300,
       maxSessions: 10,
       maxTrainers: 10
     }
@@ -46,7 +46,7 @@ export const SUBSCRIPTION_PLANS = {
     name: 'Professional',
     modules: ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference'] as ModuleType[],
     limits: {
-      maxParticipants: 200,
+      maxParticipants: 500,
       maxSessions: 50,
       maxTrainers: 10
     }
@@ -55,7 +55,7 @@ export const SUBSCRIPTION_PLANS = {
     name: 'Enterprise',
     modules: ['quiz', 'bingo', 'millionaire', 'speedround', 'spotdifference'] as ModuleType[],
     limits: {
-      maxParticipants: 1000,
+      maxParticipants: 2000,
       maxSessions: -1, // unlimited
       maxTrainers: -1   // unlimited
     }

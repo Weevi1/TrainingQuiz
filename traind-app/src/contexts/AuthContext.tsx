@@ -273,7 +273,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           status: 'active',
           modules: ['quiz', 'bingo'],
           limits: {
-            maxParticipants: 50,
+            maxParticipants: 300,
             maxSessions: -1,
             maxTrainers: 3
           },
