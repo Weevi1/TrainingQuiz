@@ -82,7 +82,6 @@ export const PresenterResultsSummary: React.FC<Props> = ({
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
   const hasAwards = awardResults.awards.length > 0
-  const hasPodium = entries.length > 0
   const bingoWinners = participants.filter(p => p.gameState?.gameWon).length
 
   const clearTimers = useCallback(() => {
@@ -92,6 +91,7 @@ export const PresenterResultsSummary: React.FC<Props> = ({
 
   const totalQ = quiz?.questions.length || 1
   const entries = useMemo(() => buildLeaderboard(participants, totalQ), [participants, totalQ])
+  const hasPodium = entries.length > 0
 
   // Animated stats
   const animAvg = useCountUp(sessionStats.averageScore, 1500, true)
