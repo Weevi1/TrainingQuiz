@@ -6,9 +6,7 @@
 
 import { useEffect, useRef } from 'react'
 import { soundSystem } from '../lib/soundSystem'
-
-// Must match the RevealPhase type exported from ../components/presenter/StagedReveal
-type RevealPhase = 'splash' | 'podium' | 'awards' | 'leaderboard' | 'stats'
+import type { RevealPhase } from '../components/presenter/StagedReveal'
 
 interface UsePresenterSoundsOptions {
   /** Only play sounds if enabled (not muted). Defaults to true. */

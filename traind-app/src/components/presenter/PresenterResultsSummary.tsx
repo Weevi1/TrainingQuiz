@@ -86,8 +86,21 @@ function buildLeaderboard(participants: Participant[], maxScore: number, isBingo
     return avgA - avgB
   })
 
+  // Competition ranking ("1224"): players with the same score-key share a rank,
+  // and the next distinct score skips ahead. Tied players are still listed in
+  // tiebreaker order (faster avg time first for quiz, fewer cells / earlier
+  // bingo for bingo) but their displayed rank number is the same.
+  let displayRank = 0
+  let lastKey: number | null = null
   return sorted.map((p, i) => {
-    const rank = i + 1
+    const tieKey = isBingoSession
+      ? (p.gameState?.gameWon ? 1e9 : 0) + (p.gameState?.cellsMarked || 0)
+      : (p.gameState?.score || p.finalScore || 0)
+    if (tieKey !== lastKey) {
+      displayRank = i + 1
+      lastKey = tieKey
+    }
+
     const rawScore = p.gameState?.score || p.finalScore || 0
     const scorePct = maxScore > 0 ? Math.round((rawScore / maxScore) * 100) : 0
     const answered = p.gameState?.answers?.length || 0
@@ -96,7 +109,7 @@ function buildLeaderboard(participants: Participant[], maxScore: number, isBingo
     ;(p.gameState?.answers || []).forEach(a => { if (a.isCorrect) { cur++; best = Math.max(best, cur) } else cur = 0 })
     return {
       participant: p,
-      rank,
+      rank: displayRank,
       scorePct,
       avgTime,
       bestStreak: best,
@@ -199,6 +212,60 @@ const PodiumColumn: React.FC<{
   )
 }
 
+// --- Header stat counters ---
+// Extracted into a memoized child so the three `useCountUp`s don't trigger a
+// ~180×/sec re-render of the entire PresenterResultsSummary tree (which
+// includes the leaderboard rows). Parent re-renders only when its own state
+// changes (~5–6 times during the staged reveal), at which point HeaderStats
+// re-renders too — but its render is cheap.
+
+interface HeaderStatsProps {
+  totalParticipants: number
+  avgScorePct: number
+  avgCellsMarked: number
+  completionRate: number
+  bingoWinners: number
+  averageTime: number
+  isBingoSession: boolean
+  timeFormatter: (seconds: number) => string
+}
+
+const HeaderStats: React.FC<HeaderStatsProps> = React.memo(({
+  totalParticipants, avgScorePct, avgCellsMarked, completionRate,
+  bingoWinners, averageTime, isBingoSession, timeFormatter,
+}) => {
+  const animPlayers = useCountUp(totalParticipants, 800, true)
+  const animSecondary = useCountUp(isBingoSession ? avgCellsMarked : avgScorePct, 1500, true)
+  const animCompletion = useCountUp(completionRate, 1500, true)
+
+  const cells = [
+    { val: String(animPlayers), label: 'Players', color: 'var(--primary-color)' },
+    isBingoSession
+      ? { val: String(animSecondary), label: 'Avg Cells', color: 'var(--success-color)' }
+      : { val: `${animSecondary}%`, label: 'Avg Score', color: 'var(--success-color)' },
+    isBingoSession
+      ? { val: String(bingoWinners), label: 'BINGOs', color: 'var(--gold-color, #fbbf24)' }
+      : { val: `${animCompletion}%`, label: 'Completion', color: 'var(--info-color, #2563eb)' },
+    { val: timeFormatter(averageTime), label: 'Avg Time', color: 'var(--accent-color, #9333ea)' },
+  ]
+
+  return (
+    <div className="flex items-center gap-5">
+      {cells.map((s, i) => (
+        <div
+          key={s.label}
+          className="text-center"
+          style={{ animation: `rsFadeDown 600ms ease-out ${200 + i * 100}ms both` }}
+        >
+          <div className="text-3xl font-bold tabular-nums" style={{ color: s.color }}>{s.val}</div>
+          <div className="text-xs font-medium uppercase tracking-wider mt-0.5" style={{ color: 'var(--text-secondary-color)' }}>{s.label}</div>
+        </div>
+      ))}
+    </div>
+  )
+})
+HeaderStats.displayName = 'HeaderStats'
+
 // --- Main component ---
 
 export const PresenterResultsSummary: React.FC<Props> = ({
@@ -250,14 +317,24 @@ export const PresenterResultsSummary: React.FC<Props> = ({
     return Math.round(entries.reduce((s, e) => s + e.cellsMarked, 0) / entries.length)
   }, [entries])
 
-  // Animated stats
-  const animSecondary = useCountUp(isBingoSession ? avgCellsMarked : avgScorePct, 1500, true)
-  const animCompletion = useCountUp(sessionStats.completionRate, 1500, true)
-  const animPlayers = useCountUp(sessionStats.totalParticipants, 800, true)
+  // (Stat counters live inside <HeaderStats /> below — pulled out so their
+  // 60fps state updates don't trigger re-renders of the rest of the tree.)
 
-  // Timeline orchestration
+  // Timeline orchestration.
+  // Effect deps deliberately exclude `clearTimers` (stable useCallback),
+  // `onPhaseChange` (parent passes a fresh arrow each render — including it
+  // would restart the timeline every parent render), and the `setX` setters
+  // (always stable). The effect *does* re-run when the relevant data shape
+  // changes (`hasPodium`, `hasAwards`, awards count) — and when it does we
+  // reset all the reveal state so a stale "this award is already shown" flag
+  // doesn't carry over from the previous run.
   useEffect(() => {
     clearTimers()
+    setStage('title')
+    setPodiumRevealed(new Set())
+    setAwardsRevealed(0)
+    setLeaderboardRevealed(false)
+
     const t = (fn: () => void, ms: number) => { timersRef.current.push(setTimeout(fn, ms)) }
 
     onPhaseChange?.('splash')
@@ -283,15 +360,27 @@ export const PresenterResultsSummary: React.FC<Props> = ({
     t(() => { setStage('done'); onPhaseChange?.('stats') }, cursor + 1200)
 
     return clearTimers
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasPodium, hasAwards, awardResults.awards.length])
 
-  const skipToEnd = () => {
+  const skipToEnd = useCallback(() => {
     clearTimers()
     setPodiumRevealed(new Set([1, 2, 3]))
     setAwardsRevealed(awardResults.awards.length)
     setLeaderboardRevealed(true)
     setStage('done')
     onPhaseChange?.('stats')
+  }, [clearTimers, awardResults.awards.length, onPhaseChange])
+
+  // Keyboard accessibility for the staged-reveal skip — Escape / Space / Enter
+  // all advance to 'done'. Useful for projector remotes that send keypresses,
+  // and lets keyboard-only users skip without a mouse.
+  const onWrapperKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (stage === 'done') return
+    if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault()
+      skipToEnd()
+    }
   }
 
   // --- Podium layout helpers ---
@@ -318,15 +407,26 @@ export const PresenterResultsSummary: React.FC<Props> = ({
   const rankMedal = (r: number) => r === 1 ? '\u{1F947}' : r === 2 ? '\u{1F948}' : r === 3 ? '\u{1F949}' : String(r)
   const rankBg = (r: number) => r === 1 ? 'rgba(251,191,36,0.12)' : r === 2 ? 'rgba(156,163,175,0.1)' : r === 3 ? 'rgba(217,119,6,0.1)' : 'transparent'
 
-  // Row sizing for leaderboard
-  const rowH = entries.length > 15 ? 36 : entries.length > 10 ? 42 : entries.length > 6 ? 48 : 56
-  const nameSize = entries.length > 12 ? 'text-lg' : entries.length > 8 ? 'text-xl' : 'text-2xl'
-  const scoreTextSize = entries.length > 12 ? 'text-lg' : entries.length > 8 ? 'text-xl' : 'text-2xl'
+  // Cap visible rows so the leaderboard never overflows the 1080p canvas.
+  // Past 20, append a single muted "+ N more" row instead of scrolling.
+  const LEADERBOARD_CAP = 20
+  const visibleEntries = entries.slice(0, LEADERBOARD_CAP)
+  const hiddenCount = Math.max(0, entries.length - LEADERBOARD_CAP)
+
+  // Row sizing for leaderboard — based on visibleEntries so the cap doesn't
+  // also shrink rows unnecessarily.
+  const rowH = visibleEntries.length > 15 ? 36 : visibleEntries.length > 10 ? 42 : visibleEntries.length > 6 ? 48 : 56
+  const nameSize = visibleEntries.length > 12 ? 'text-lg' : visibleEntries.length > 8 ? 'text-xl' : 'text-2xl'
+  const scoreTextSize = visibleEntries.length > 12 ? 'text-lg' : visibleEntries.length > 8 ? 'text-xl' : 'text-2xl'
 
   return (
     <div
-      className="relative flex flex-col h-full overflow-hidden"
+      className="relative flex flex-col h-full overflow-hidden focus:outline-none"
       onClick={stage !== 'done' ? skipToEnd : undefined}
+      onKeyDown={onWrapperKeyDown}
+      tabIndex={stage !== 'done' ? 0 : -1}
+      role={stage !== 'done' ? 'button' : undefined}
+      aria-label={stage !== 'done' ? 'Skip results animation' : undefined}
       style={{ cursor: stage !== 'done' ? 'pointer' : 'default' }}
     >
       {/* ═══ BACKGROUND GRADIENT ═══ */}
@@ -357,28 +457,18 @@ export const PresenterResultsSummary: React.FC<Props> = ({
 
         <div className="flex-1" />
 
-        {/* Stat counters — large and glowing */}
-        <div className="flex items-center gap-5">
-          {[
-            { val: String(animPlayers), label: 'Players', color: 'var(--primary-color)' },
-            isBingoSession
-              ? { val: String(animSecondary), label: 'Avg Cells', color: 'var(--success-color)' }
-              : { val: `${animSecondary}%`, label: 'Avg Score', color: 'var(--success-color)' },
-            isBingoSession
-              ? { val: String(bingoWinners), label: 'BINGOs', color: 'var(--gold-color, #fbbf24)' }
-              : { val: `${animCompletion}%`, label: 'Completion', color: 'var(--info-color, #2563eb)' },
-            { val: timeFormatter(sessionStats.averageTime), label: 'Avg Time', color: 'var(--accent-color, #9333ea)' },
-          ].map((s, i) => (
-            <div
-              key={s.label}
-              className="text-center"
-              style={{ animation: `rsFadeDown 600ms ease-out ${200 + i * 100}ms both` }}
-            >
-              <div className="text-3xl font-bold tabular-nums" style={{ color: s.color }}>{s.val}</div>
-              <div className="text-xs font-medium uppercase tracking-wider mt-0.5" style={{ color: 'var(--text-secondary-color)' }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
+        {/* Stat counters — extracted into a memoized child so the per-frame
+            count animations don't re-render the rest of the results tree. */}
+        <HeaderStats
+          totalParticipants={sessionStats.totalParticipants}
+          avgScorePct={avgScorePct}
+          avgCellsMarked={avgCellsMarked}
+          completionRate={sessionStats.completionRate}
+          bingoWinners={bingoWinners}
+          averageTime={sessionStats.averageTime}
+          isBingoSession={isBingoSession}
+          timeFormatter={timeFormatter}
+        />
       </div>
 
       {/* ═══ PODIUM — Full-width, dramatic ═══ */}
@@ -505,7 +595,7 @@ export const PresenterResultsSummary: React.FC<Props> = ({
 
         {/* Leaderboard rows — auto-sized to fill space */}
         <div className="flex-1 overflow-y-auto space-y-1">
-          {entries.map((e, i) => {
+          {visibleEntries.map((e, i) => {
             // Score bar: scorePct for quiz, % cells marked for bingo
             const barPct = isBingoSession
               ? (e.totalCells > 0 ? (e.cellsMarked / e.totalCells) * 100 : 0)
@@ -617,6 +707,26 @@ export const PresenterResultsSummary: React.FC<Props> = ({
               </div>
             )
           })}
+
+          {/* "+ N more" trailing row when leaderboard is capped */}
+          {hiddenCount > 0 && (
+            <div
+              className="flex items-center justify-center rounded-xl px-4"
+              style={{
+                height: rowH,
+                backgroundColor: 'transparent',
+                opacity: leaderboardRevealed ? 0.55 : 0,
+                transition: `opacity 500ms ease-out ${visibleEntries.length * 60 + 100}ms`,
+              }}
+            >
+              <span
+                className="text-base italic"
+                style={{ color: 'var(--text-secondary-color)' }}
+              >
+                + {hiddenCount} more {hiddenCount === 1 ? 'participant' : 'participants'}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -635,16 +745,7 @@ export const PresenterResultsSummary: React.FC<Props> = ({
         </div>
       )}
 
-      <style>{`
-        @keyframes rsFadeDown {
-          from { opacity: 0; transform: translateY(-12px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes rsGlowPulse {
-          0%, 100% { filter: drop-shadow(0 0 6px var(--gold-color, #fbbf24)); }
-          50% { filter: drop-shadow(0 0 16px var(--gold-color, #fbbf24)); }
-        }
-      `}</style>
+      {/* Keyframes (rsFadeDown, rsGlowPulse) live in src/index.css */}
     </div>
   )
 }
