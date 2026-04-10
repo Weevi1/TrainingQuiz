@@ -31,20 +31,34 @@ interface Props {
 }
 
 // --- Animated counter ---
+// Interpolates from the *current* displayed value to `target` so that mid-flight
+// data updates (e.g. a late participant submission bumping `averageScore`) ease
+// smoothly instead of snapping back to 0 first.
 function useCountUp(target: number, durationMs: number, active: boolean): number {
   const [value, setValue] = useState(0)
+  const fromRef = useRef(0)
+
   useEffect(() => {
-    if (!active) { setValue(0); return }
+    if (!active) {
+      setValue(0)
+      fromRef.current = 0
+      return
+    }
+    const from = fromRef.current
     const start = performance.now()
     let raf: number
     const tick = (now: number) => {
       const p = Math.min((now - start) / durationMs, 1)
-      setValue(Math.round(target * (1 - Math.pow(1 - p, 3))))
+      const eased = 1 - Math.pow(1 - p, 3) // ease-out cubic
+      const next = Math.round(from + (target - from) * eased)
+      setValue(next)
+      fromRef.current = next
       if (p < 1) raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [target, durationMs, active])
+
   return value
 }
 
@@ -207,8 +221,23 @@ export const PresenterResultsSummary: React.FC<Props> = ({
   )
   const hasPodium = entries.length > 0
 
+  // Header stats — derived from `entries` so they always agree with the leaderboard.
+  // `sessionStats.averageScore` from SessionControl is the *raw* point average (e.g.
+  // 300 points), not a percentage. Displaying it with a `%` suffix produced impossible
+  // values like "300%". We compute the score percentage here using the same source
+  // that powers the leaderboard column.
+  const avgScorePct = useMemo(() => {
+    if (entries.length === 0) return 0
+    return Math.round(entries.reduce((s, e) => s + e.scorePct, 0) / entries.length)
+  }, [entries])
+
+  const avgCellsMarked = useMemo(() => {
+    if (entries.length === 0) return 0
+    return Math.round(entries.reduce((s, e) => s + e.cellsMarked, 0) / entries.length)
+  }, [entries])
+
   // Animated stats
-  const animAvg = useCountUp(sessionStats.averageScore, 1500, true)
+  const animSecondary = useCountUp(isBingoSession ? avgCellsMarked : avgScorePct, 1500, true)
   const animCompletion = useCountUp(sessionStats.completionRate, 1500, true)
   const animPlayers = useCountUp(sessionStats.totalParticipants, 800, true)
 
@@ -317,7 +346,9 @@ export const PresenterResultsSummary: React.FC<Props> = ({
         <div className="flex items-center gap-5">
           {[
             { val: String(animPlayers), label: 'Players', color: 'var(--primary-color)' },
-            { val: `${animAvg}%`, label: 'Avg Score', color: 'var(--success-color)' },
+            isBingoSession
+              ? { val: String(animSecondary), label: 'Avg Cells', color: 'var(--success-color)' }
+              : { val: `${animSecondary}%`, label: 'Avg Score', color: 'var(--success-color)' },
             isBingoSession
               ? { val: String(bingoWinners), label: 'BINGOs', color: 'var(--gold-color, #fbbf24)' }
               : { val: `${animCompletion}%`, label: 'Completion', color: 'var(--info-color, #2563eb)' },
@@ -346,38 +377,66 @@ export const PresenterResultsSummary: React.FC<Props> = ({
           }}
         >
           <div className="flex items-end justify-center h-full gap-6" style={{ paddingBottom: 8 }}>
-            {/* 2nd place */}
-            {second && (
-              <PodiumColumn
-                performer={second}
-                rank={2}
-                visible={podiumRevealed.has(2)}
-                scoreFormatter={scoreFormatter}
-                maxHeight={podiumHeight}
-                compact={manyParticipants}
-              />
-            )}
-            {/* 1st place */}
-            {first && (
-              <PodiumColumn
-                performer={first}
-                rank={1}
-                visible={podiumRevealed.has(1)}
-                scoreFormatter={scoreFormatter}
-                maxHeight={podiumHeight}
-                compact={manyParticipants}
-              />
-            )}
-            {/* 3rd place */}
-            {third && (
-              <PodiumColumn
-                performer={third}
-                rank={3}
-                visible={podiumRevealed.has(3)}
-                scoreFormatter={scoreFormatter}
-                maxHeight={podiumHeight}
-                compact={manyParticipants}
-              />
+            {/*
+              Render order:
+              - 3 participants → 2nd | 1st | 3rd  (1st centered, classic podium)
+              - 2 participants → 1st | 2nd        (no 3rd, so 1st on the left reads naturally)
+              - 1 participant  → 1st              (centered by flex)
+            */}
+            {third ? (
+              <>
+                {second && (
+                  <PodiumColumn
+                    performer={second}
+                    rank={2}
+                    visible={podiumRevealed.has(2)}
+                    scoreFormatter={scoreFormatter}
+                    maxHeight={podiumHeight}
+                    compact={manyParticipants}
+                  />
+                )}
+                {first && (
+                  <PodiumColumn
+                    performer={first}
+                    rank={1}
+                    visible={podiumRevealed.has(1)}
+                    scoreFormatter={scoreFormatter}
+                    maxHeight={podiumHeight}
+                    compact={manyParticipants}
+                  />
+                )}
+                <PodiumColumn
+                  performer={third}
+                  rank={3}
+                  visible={podiumRevealed.has(3)}
+                  scoreFormatter={scoreFormatter}
+                  maxHeight={podiumHeight}
+                  compact={manyParticipants}
+                />
+              </>
+            ) : (
+              <>
+                {first && (
+                  <PodiumColumn
+                    performer={first}
+                    rank={1}
+                    visible={podiumRevealed.has(1)}
+                    scoreFormatter={scoreFormatter}
+                    maxHeight={podiumHeight}
+                    compact={manyParticipants}
+                  />
+                )}
+                {second && (
+                  <PodiumColumn
+                    performer={second}
+                    rank={2}
+                    visible={podiumRevealed.has(2)}
+                    scoreFormatter={scoreFormatter}
+                    maxHeight={podiumHeight}
+                    compact={manyParticipants}
+                  />
+                )}
+              </>
             )}
           </div>
 
@@ -527,10 +586,10 @@ export const PresenterResultsSummary: React.FC<Props> = ({
                       )}
                     </div>
 
-                    {/* Time spent (or time-to-bingo) */}
+                    {/* Time spent (or time-to-bingo) — uses timeFormatter for mm:ss */}
                     <div className="relative w-20 text-right flex-shrink-0">
                       <span className="text-base tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
-                        {e.timeSpent ? `${Math.round(e.timeSpent)}s` : '—'}
+                        {e.timeSpent ? timeFormatter(Math.round(e.timeSpent)) : '—'}
                       </span>
                     </div>
                   </>
@@ -546,10 +605,10 @@ export const PresenterResultsSummary: React.FC<Props> = ({
                       </span>
                     </div>
 
-                    {/* Avg answer time */}
+                    {/* Avg answer time — uses timeFormatter for consistency */}
                     <div className="relative w-16 text-right flex-shrink-0">
                       <span className="text-base tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
-                        {e.avgTime}s
+                        {timeFormatter(e.avgTime)}
                       </span>
                     </div>
 
