@@ -24,10 +24,13 @@ export interface AwardResults {
   topPerformers: AwardRecipient[]
 }
 
-// Calculate all awards for a completed session
+// Calculate all awards for a completed session.
+// `maxScore` accounts for boss multipliers — pass 0 to fall back to legacy point-based
+// thresholds (kept for callers that don't yet pass it).
 export function calculateSessionAwards(
   participants: Participant[],
-  totalQuestions: number
+  totalQuestions: number,
+  maxScore: number = 0
 ): AwardResults {
   const awards: Award[] = []
 
@@ -136,11 +139,17 @@ export function calculateSessionAwards(
     })
   }
 
-  // 4. Photo Finish Award - Closest competition (small score difference at top)
+  // 4. Photo Finish Award - Closest competition (small score difference at top).
+  // Threshold is 5% of maxScore (boss-multiplier-aware) when caller provides it,
+  // otherwise the legacy 100-raw-point threshold for callers that haven't migrated.
   if (sortedByScore.length >= 2) {
     const scoreDiff = sortedByScore[0].score - sortedByScore[1].score
-    // Award if difference is 100 points or less (1 question)
-    if (scoreDiff <= 100 && scoreDiff > 0) {
+    const usePctThreshold = maxScore > 0
+    const threshold = usePctThreshold ? maxScore * 0.05 : 100
+    if (scoreDiff > 0 && scoreDiff <= threshold) {
+      const valueLabel = usePctThreshold
+        ? `Won by ${(Math.round((scoreDiff / maxScore) * 1000) / 10)}%`
+        : `Won by ${scoreDiff} pts`
       awards.push({
         id: 'photo-finish',
         name: 'Photo Finish',
@@ -150,7 +159,7 @@ export function calculateSessionAwards(
         recipients: [{
           participantId: sortedByScore[0].id,
           participantName: sortedByScore[0].name,
-          value: `Won by ${scoreDiff} pts`
+          value: valueLabel
         }]
       })
     }

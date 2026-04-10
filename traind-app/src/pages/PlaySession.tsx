@@ -932,20 +932,39 @@ const LegacyQuizGame: React.FC<{
       answers: [...prev.answers, answerRecord]
     }))
 
-    // Update participant game state (critical for presenter to show scores)
+    // Update participant game state (critical for presenter to show scores).
+    // We retry once before logging a hard failure so a flaky network doesn't
+    // silently lose an answer. If both attempts fail, the local UI has already
+    // advanced — we surface a CRITICAL log so the trainer can see it in DevTools
+    // post-session and reconcile manually if needed. A full checkpoint-on-completion
+    // is on the follow-up list.
+    const writePayload = {
+      currentQuestionIndex: state.currentQuestionIndex,
+      score: newScore,
+      streak: newStreak,
+      answers: [...state.answers, answerRecord]
+    }
     try {
       await FirestoreService.updateParticipantGameState(
         sessionState.sessionId,
         participantId,
-        {
-          currentQuestionIndex: state.currentQuestionIndex,
-          score: newScore,
-          streak: newStreak,
-          answers: [...state.answers, answerRecord]
-        }
+        writePayload
       )
-    } catch (error) {
-      console.error('Error updating participant game state:', error)
+    } catch (firstError) {
+      console.warn('Answer write failed, retrying once:', firstError)
+      await new Promise(r => setTimeout(r, 200))
+      try {
+        await FirestoreService.updateParticipantGameState(
+          sessionState.sessionId,
+          participantId,
+          writePayload
+        )
+      } catch (secondError) {
+        console.error(
+          '[CRITICAL] Answer not persisted after retry — score may be inconsistent for participant',
+          { participantId, questionId: question.id, error: secondError }
+        )
+      }
     }
 
     // Show result briefly (1.5s — enough to register correct/incorrect, keeps pace snappy)

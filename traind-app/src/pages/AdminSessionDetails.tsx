@@ -186,9 +186,23 @@ export const AdminSessionDetails: React.FC = () => {
 
   const handleDownloadPDF = async () => {
     if (!session || !currentOrganization) return
+    // Quiz sessions need a quiz to render the report — bingo doesn't.
+    if (session.gameType !== 'bingo' && !quiz) {
+      alert('Cannot generate report: quiz not loaded for this session.')
+      return
+    }
+    // Boss-multiplier-aware max score so the Photo Finish award uses the
+    // proportional 5% threshold instead of a hardcoded 100 raw points.
+    const maxScore = quiz
+      ? quiz.questions.reduce((sum, q) => {
+          const multiplier = q.isBoss ? (q.bossPointMultiplier || 2) : 1
+          return sum + 100 * multiplier
+        }, 0)
+      : 0
     const awardResults = calculateSessionAwards(
       participants,
-      quiz?.questions.length || 0
+      quiz?.questions.length || 0,
+      maxScore
     )
     await generateSessionPDF(
       session,

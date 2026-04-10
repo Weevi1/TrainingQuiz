@@ -10,6 +10,8 @@ interface ParticipantWithAnalysis {
   id: string
   name: string
   score: number
+  /** Boss-multiplier-aware percentage (rawScore / maxScore * 100). For bingo this is the cells coverage. */
+  scorePct: number
   correctAnswers: number
   totalQuestions: number
   wrongAnswers: WrongAnswer[]
@@ -190,6 +192,15 @@ export async function generateDetailedAnalysisPDF(
 }
 
 function processParticipants(participants: Participant[], quiz: Quiz): ParticipantWithAnalysis[] {
+  // Max possible score, accounting for boss-question multipliers — same formula as
+  // SessionControl.scoreToPercentage and PresenterResultsSummary.maxScore. Without
+  // this, "score %" in the PDF would be (correct/total)*100, which double-counts
+  // boss questions and disagrees with the projector header for boss-bearing quizzes.
+  const maxScore = quiz.questions.reduce((sum, q) => {
+    const multiplier = q.isBoss ? (q.bossPointMultiplier || 2) : 1
+    return sum + 100 * multiplier
+  }, 0)
+
   return participants
     .filter(p => p.gameState && p.gameState.answers && p.gameState.answers.length > 0)
     .map(p => {
@@ -197,6 +208,8 @@ function processParticipants(participants: Participant[], quiz: Quiz): Participa
       const correctAnswers = answers.filter(a => a.isCorrect).length
       // Use totalQuestions from session-time gameState (not live quiz, which may have been edited since)
       const totalQuestions = p.gameState!.totalQuestions || quiz.questions.length
+      const rawScore = p.gameState!.score || p.finalScore || 0
+      const scorePct = maxScore > 0 ? Math.round((rawScore / maxScore) * 100) : 0
 
       // Calculate wrong answers with details
       const wrongAnswers: WrongAnswer[] = answers
@@ -232,7 +245,8 @@ function processParticipants(participants: Participant[], quiz: Quiz): Participa
       return {
         id: p.id,
         name: p.name,
-        score: p.gameState!.score || p.finalScore || 0,
+        score: rawScore,
+        scorePct,
         correctAnswers,
         totalQuestions,
         wrongAnswers,
@@ -246,16 +260,23 @@ function processParticipants(participants: Participant[], quiz: Quiz): Participa
 function processBingoParticipants(participants: Participant[]): ParticipantWithAnalysis[] {
   return participants
     .filter(p => p.gameState && p.gameState.gameType === 'bingo')
-    .map(p => ({
-      id: p.id,
-      name: p.name,
-      score: p.gameState!.score || p.finalScore || 0,
-      correctAnswers: p.gameState!.cellsMarked || 0,
-      totalQuestions: p.gameState!.totalCells || 25,
-      wrongAnswers: [], // Bingo has no wrong answers
-      avgResponseTime: p.gameState!.timeSpent || 0,
-      bestStreak: p.gameState!.bestStreak || 0
-    }))
+    .map(p => {
+      const cellsMarked = p.gameState!.cellsMarked || 0
+      const totalCells = p.gameState!.totalCells || 25
+      return {
+        id: p.id,
+        name: p.name,
+        score: p.gameState!.score || p.finalScore || 0,
+        // For bingo, "score percentage" is cells coverage. Quiz boss-multiplier
+        // logic doesn't apply, so we use the count-based formula here.
+        scorePct: totalCells > 0 ? Math.round((cellsMarked / totalCells) * 100) : 0,
+        correctAnswers: cellsMarked,
+        totalQuestions: totalCells,
+        wrongAnswers: [], // Bingo has no wrong answers
+        avgResponseTime: p.gameState!.timeSpent || 0,
+        bestStreak: p.gameState!.bestStreak || 0
+      }
+    })
     .sort((a, b) => b.score - a.score || a.avgResponseTime - b.avgResponseTime)
 }
 
@@ -271,9 +292,7 @@ function calculateBingoStats(participants: ParticipantWithAnalysis[]): SessionSt
     }
   }
 
-  const scores = participants.map(p =>
-    p.totalQuestions > 0 ? Math.round((p.correctAnswers / p.totalQuestions) * 100) : 0
-  )
+  const scores = participants.map(p => p.scorePct)
 
   return {
     totalParticipants: participants.length,
@@ -297,9 +316,10 @@ function calculateStats(participants: ParticipantWithAnalysis[]): SessionStats {
     }
   }
 
-  const scores = participants.map(p =>
-    Math.round((p.correctAnswers / p.totalQuestions) * 100)
-  )
+  // Use the boss-multiplier-aware percentage from processParticipants instead
+  // of recomputing correct/total — that formula was the source of the visible
+  // "300%" bug on the projector and the same incorrect math in PDF reports.
+  const scores = participants.map(p => p.scorePct)
 
   return {
     totalParticipants: participants.length,
@@ -587,13 +607,13 @@ function addParticipantTable(pdf: jsPDF, participants: ParticipantWithAnalysis[]
   pdf.setFont('helvetica', 'bold')
   pdf.text('PARTICIPANT RESULTS', 22, yPos + 6.5)
 
-  // Table data
+  // Table data — `scorePct` is computed in processParticipants using
+  // rawScore/maxScore (boss-multiplier-aware), matching the projector header.
   const tableData = participants.map((p, idx) => {
-    const percentage = Math.round((p.correctAnswers / p.totalQuestions) * 100)
     return [
       `#${idx + 1}`,
       p.name,
-      `${percentage}%`,
+      `${p.scorePct}%`,
       `${p.correctAnswers}/${p.totalQuestions}`,
       p.bestStreak.toString(),
       `${p.avgResponseTime.toFixed(1)}s`
@@ -662,11 +682,9 @@ function addBingoParticipantTable(pdf: jsPDF, participants: ParticipantWithAnaly
   pdf.setFont('helvetica', 'bold')
   pdf.text('PARTICIPANT RESULTS', 22, yPos + 6.5)
 
-  // Table data - adapted for bingo
+  // Table data - adapted for bingo. `scorePct` here is cells coverage (set in processBingoParticipants).
   const tableData = participants.map((p, idx) => {
-    const coverage = p.totalQuestions > 0
-      ? Math.round((p.correctAnswers / p.totalQuestions) * 100)
-      : 0
+    const coverage = p.scorePct
     return [
       `#${idx + 1}`,
       p.name,
@@ -950,8 +968,8 @@ function addDetailedAnalysis(pdf: jsPDF, participants: ParticipantWithAnalysis[]
     const minFirstBlock = 10 + 15 + 32
     yPos = ensureSpace(pdf, yPos, minFirstBlock)
 
-    // Participant header bar
-    const percentage = Math.round((participant.correctAnswers / participant.totalQuestions) * 100)
+    // Participant header bar (boss-multiplier-aware percentage from processParticipants)
+    const percentage = participant.scorePct
     pdf.setFillColor(...DEFAULT_COLORS.gold)
     pdf.rect(PAGE.contentLeft, yPos, PAGE.contentWidth, 10, 'F')
     pdf.setTextColor(...DEFAULT_COLORS.text)

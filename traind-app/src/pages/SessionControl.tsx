@@ -134,7 +134,13 @@ export const SessionControl: React.FC = () => {
     if (!quiz) {
       return { awards: [], topPerformers: [] }
     }
-    return calculateSessionAwards(participants, quiz.questions.length)
+    // Pass boss-multiplier-aware maxScore so the Photo Finish threshold is
+    // proportional to the actual scoring range, not a hardcoded 100 raw points.
+    const maxScore = quiz.questions.reduce((sum, q) => {
+      const multiplier = q.isBoss ? (q.bossPointMultiplier || 2) : 1
+      return sum + 100 * multiplier
+    }, 0)
+    return calculateSessionAwards(participants, quiz.questions.length, maxScore)
   }, [session?.status, participants, quiz, isBingoSession, resultsReady])
 
   // Presenter celebration sounds synced with staged reveal phases

@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Trophy, Medal, Users } from 'lucide-react'
 import type { Participant, Quiz } from '../../lib/firestore'
-import type { AwardRecipient, AwardResults } from '../../lib/awardCalculator'
+import type { AwardResults } from '../../lib/awardCalculator'
 import { AvatarDisplay } from '../AvatarDisplay'
 
 type RevealStage = 'title' | 'podium' | 'awards' | 'leaderboard' | 'done'
@@ -112,29 +112,38 @@ function buildLeaderboard(participants: Participant[], maxScore: number, isBingo
 // --- Podium column (full-width style) ---
 // Defined above the main component so it's in scope before its JSX usages.
 
+// Hoisted to module scope so they're not re-allocated on every render.
+const PODIUM_HEIGHT_FRACTIONS: Record<number, number> = { 1: 0.78, 2: 0.55, 3: 0.4 }
+const PODIUM_GRADIENTS: Record<number, string> = {
+  1: 'linear-gradient(to top, #b8860b, var(--gold-color, #fbbf24), #fde68a)',
+  2: 'linear-gradient(to top, #6b7280, var(--silver-color, #9ca3af), #e5e7eb)',
+  3: 'linear-gradient(to top, #92400e, var(--bronze-color, #d97706), #fbbf24)',
+}
+const PODIUM_GLOWS: Record<number, string> = {
+  1: '0 -6px 40px rgba(251, 191, 36, 0.4), 0 0 60px rgba(251, 191, 36, 0.15)',
+  2: '0 -4px 25px rgba(156, 163, 175, 0.25)',
+  3: '0 -4px 25px rgba(217, 119, 6, 0.25)',
+}
+
+interface PodiumPerformer {
+  participantId: string
+  participantName: string
+  value: number | string
+  rank: number
+  avatar?: string
+}
+
 const PodiumColumn: React.FC<{
-  performer: AwardRecipient
+  performer: PodiumPerformer
   rank: number
   visible: boolean
   scoreFormatter: (v: number | string) => string
   maxHeight: number
   compact: boolean
 }> = ({ performer, rank, visible, scoreFormatter, maxHeight, compact }) => {
-  const heightFractions: Record<number, number> = { 1: 0.78, 2: 0.55, 3: 0.4 }
-  const blockH = Math.round(maxHeight * heightFractions[rank])
+  // `?? 0.4` guards against an unexpected rank yielding NaN.
+  const blockH = Math.round(maxHeight * (PODIUM_HEIGHT_FRACTIONS[rank] ?? 0.4))
   const colW = rank === 1 ? (compact ? 180 : 220) : (compact ? 150 : 180)
-
-  const gradients: Record<number, string> = {
-    1: 'linear-gradient(to top, #b8860b, var(--gold-color, #fbbf24), #fde68a)',
-    2: 'linear-gradient(to top, #6b7280, var(--silver-color, #9ca3af), #e5e7eb)',
-    3: 'linear-gradient(to top, #92400e, var(--bronze-color, #d97706), #fbbf24)',
-  }
-
-  const glows: Record<number, string> = {
-    1: '0 -6px 40px rgba(251, 191, 36, 0.4), 0 0 60px rgba(251, 191, 36, 0.15)',
-    2: '0 -4px 25px rgba(156, 163, 175, 0.25)',
-    3: '0 -4px 25px rgba(217, 119, 6, 0.25)',
-  }
 
   return (
     <div
@@ -152,6 +161,11 @@ const PodiumColumn: React.FC<{
           <Trophy size={compact ? 32 : 40} style={{ color: 'var(--gold-color, #fbbf24)' }} />
         </div>
       )}
+
+      {/* Avatar — sits above the name. xl in regular mode, lg when many participants. */}
+      <div className="mb-2">
+        <AvatarDisplay avatar={performer.avatar} size={compact ? 'lg' : 'xl'} />
+      </div>
 
       {/* Name + score above block */}
       <p
@@ -173,8 +187,8 @@ const PodiumColumn: React.FC<{
         className="w-full rounded-t-2xl flex items-center justify-center"
         style={{
           height: blockH,
-          background: gradients[rank],
-          boxShadow: glows[rank],
+          background: PODIUM_GRADIENTS[rank] ?? PODIUM_GRADIENTS[3],
+          boxShadow: PODIUM_GLOWS[rank] ?? PODIUM_GLOWS[3],
         }}
       >
         <span className={`${compact ? 'text-4xl' : 'text-5xl'} font-bold text-white/90 drop-shadow-lg`}>
@@ -283,12 +297,13 @@ export const PresenterResultsSummary: React.FC<Props> = ({
   // --- Podium layout helpers ---
   // Derive podium from the same sorted `entries` as the leaderboard table,
   // so podium and table rankings are always consistent (same sort, same data snapshot).
-  const podiumPerformers: AwardRecipient[] = useMemo(() =>
+  const podiumPerformers: PodiumPerformer[] = useMemo(() =>
     entries.slice(0, 3).map(e => ({
       participantId: e.participant.id,
       participantName: e.participant.name,
       value: e.participant.gameState?.score || e.participant.finalScore || 0,
       rank: e.rank,
+      avatar: e.participant.avatar,
     })),
     [entries]
   )
@@ -378,65 +393,40 @@ export const PresenterResultsSummary: React.FC<Props> = ({
         >
           <div className="flex items-end justify-center h-full gap-6" style={{ paddingBottom: 8 }}>
             {/*
-              Render order:
-              - 3 participants → 2nd | 1st | 3rd  (1st centered, classic podium)
-              - 2 participants → 1st | 2nd        (no 3rd, so 1st on the left reads naturally)
-              - 1 participant  → 1st              (centered by flex)
+              Olympic podium order: 2nd | 1st | 3rd.
+              - 3 participants → 2nd | 1st | 3rd (1st in the centre, tallest)
+              - 2 participants → 2nd | 1st (1st still on the right of 2nd)
+              - 1 participant  → 1st (centred by flex)
             */}
-            {third ? (
-              <>
-                {second && (
-                  <PodiumColumn
-                    performer={second}
-                    rank={2}
-                    visible={podiumRevealed.has(2)}
-                    scoreFormatter={scoreFormatter}
-                    maxHeight={podiumHeight}
-                    compact={manyParticipants}
-                  />
-                )}
-                {first && (
-                  <PodiumColumn
-                    performer={first}
-                    rank={1}
-                    visible={podiumRevealed.has(1)}
-                    scoreFormatter={scoreFormatter}
-                    maxHeight={podiumHeight}
-                    compact={manyParticipants}
-                  />
-                )}
-                <PodiumColumn
-                  performer={third}
-                  rank={3}
-                  visible={podiumRevealed.has(3)}
-                  scoreFormatter={scoreFormatter}
-                  maxHeight={podiumHeight}
-                  compact={manyParticipants}
-                />
-              </>
-            ) : (
-              <>
-                {first && (
-                  <PodiumColumn
-                    performer={first}
-                    rank={1}
-                    visible={podiumRevealed.has(1)}
-                    scoreFormatter={scoreFormatter}
-                    maxHeight={podiumHeight}
-                    compact={manyParticipants}
-                  />
-                )}
-                {second && (
-                  <PodiumColumn
-                    performer={second}
-                    rank={2}
-                    visible={podiumRevealed.has(2)}
-                    scoreFormatter={scoreFormatter}
-                    maxHeight={podiumHeight}
-                    compact={manyParticipants}
-                  />
-                )}
-              </>
+            {second && (
+              <PodiumColumn
+                performer={second}
+                rank={2}
+                visible={podiumRevealed.has(2)}
+                scoreFormatter={scoreFormatter}
+                maxHeight={podiumHeight}
+                compact={manyParticipants}
+              />
+            )}
+            {first && (
+              <PodiumColumn
+                performer={first}
+                rank={1}
+                visible={podiumRevealed.has(1)}
+                scoreFormatter={scoreFormatter}
+                maxHeight={podiumHeight}
+                compact={manyParticipants}
+              />
+            )}
+            {third && (
+              <PodiumColumn
+                performer={third}
+                rank={3}
+                visible={podiumRevealed.has(3)}
+                scoreFormatter={scoreFormatter}
+                maxHeight={podiumHeight}
+                compact={manyParticipants}
+              />
             )}
           </div>
 
