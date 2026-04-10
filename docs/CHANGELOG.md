@@ -4,6 +4,58 @@ All completed milestones, bug fixes, and feature work. Most recent first.
 
 ---
 
+## April 10, 2026 — Presenter Results Hardening + Quiz Flow Recheck
+
+Multiple fixes shipped together after a "white screen on quiz completion" report. Started as a single TDZ fix and grew into a full pass over `PresenterResultsSummary` and the wider quiz path.
+
+### Critical bug fixes
+- **TDZ in `PresenterResultsSummary`** — `const hasPodium = entries.length > 0` was declared above `const entries = useMemo(...)`. Production bundle threw `Cannot access 'D' before initialization` when the results screen mounted, leaving the trainer with a white projector. Fixed by reordering the declaration. Bug had been present since the file was first added (Apr 1) but only triggered when a real session reached `status === 'completed'` on a deployed build.
+- **"AVG SCORE 300%" in the projector header** — `sessionStats.averageScore` is the *raw* point average (e.g. 300 points) but the header rendered it as `${animAvg}%`. Replaced with a derived `avgScorePct` computed from the leaderboard `entries` (which use the same `rawScore / maxScore` formula as `scoreToPercentage`). Header is now bingo-aware: shows "Avg Cells" for bingo, "Avg Score" for quiz.
+- **Podium / leaderboard percentage mismatch** — podium used `scoreFormatter` (boss-multiplier-aware) while the leaderboard column used `correctCount / totalQuestions * 100`. With boss questions present these could disagree by ~10%. `buildLeaderboard` now takes `maxScore` and computes `scorePct` from the same formula.
+- **Bingo leaderboard showed 0% everywhere** — `pct = correct / totalQ` returned 0 for bingo participants (no answers array). Replaced with bingo-specific columns: `BINGO!` / `cellsMarked/totalCells`, time-to-first-bingo, and a bingo-aware sort.
+- **PDF reports also had the boss-multiplier blind spot** — `processParticipants` in `pdfExport.ts` computed pct as `correctAnswers / totalQuestions`, the same wrong math now visible in 5 downstream sites (participant table, summary stats, highest/lowest, detailed analysis header). Added `scorePct` to `ParticipantWithAnalysis` and replaced all sites. Note: boss questions aren't in active use, so this is defensive.
+- **`AdminSessionDetails.handleDownloadPDF` missing null-quiz guard** — would crash if a quiz session had no quiz loaded. Added the same guard the detailed-analysis path already had.
+- **`PlaySession` answer write was fire-and-forget** — silent failure on a network blip would advance the local UI but lose the answer in Firestore. Now retries once after 200ms; both attempts failing logs `[CRITICAL] Answer not persisted` so the trainer can spot it in DevTools.
+- **Photo Finish award threshold hardcoded at 100 raw points** — would never fire on a quiz with 5× boss questions. Added optional `maxScore` parameter; threshold becomes `maxScore * 0.05`. Legacy 100-point fallback kept for callers that don't pass it.
+
+### Hardening
+- **`<ResultsErrorBoundary>`** wraps `<PresenterResultsSummary>` in `SessionControl` so any future render bug shows a fallback "Results couldn't render — Reload" instead of a blank projector in front of a live audience.
+- **ESLint `@typescript-eslint/no-use-before-define`** enabled (`variables: true`). Catches the TDZ class of bug at write-time; TypeScript's own `ts(2448)` misses the in-function-body case.
+- **Reset reveal state at top of timeline `useEffect`** so a re-run can't leak previously-revealed `awardsRevealed` / `podiumRevealed` flags.
+- **`heightFractions[rank]` defensive guard** with `?? 0.4` so an unexpected rank doesn't yield NaN.
+
+### Cleanup / build-outs
+- **Avatars on the podium** — new local `PodiumPerformer` type carries `avatar`. `<AvatarDisplay size="xl" />` renders above the name. The cinematic moment now has faces.
+- **Competition ranking** — tied scores share a rank ("1224"), next distinct score skips ahead. Tiebreak still orders the rows visually.
+- **Leaderboard cap at top 20** + muted `+ N more participants` trailing row. Solves overflow on large sessions without scrollbars.
+- **`<HeaderStats />` extracted into a `React.memo`'d child** so the three `useCountUp` instances no longer re-render the entire results tree at ~180×/sec. Big perf win on projector hardware.
+- **Hoisted `PODIUM_HEIGHT_FRACTIONS` / `PODIUM_GRADIENTS` / `PODIUM_GLOWS`** to module scope.
+- **Keyframes `rsFadeDown` / `rsGlowPulse` moved** from inline `<style>` to `index.css` alongside the other global keyframes.
+- **Keyboard skip + a11y** on the click-to-skip wrapper: `tabIndex={0}`, `role="button"`, `aria-label`, and `Escape` / `Space` / `Enter` skip. Works with projector remotes.
+- **Olympic podium order restored** — a previous "fix" wrongly swapped the 2-participant case to "1st-on-left". Reverted; convention is always "2nd | 1st | 3rd".
+- **`useCountUp` interpolation fix** — was snapping to 0 on every `target` change. Now interpolates from current displayed value to new target via `fromRef`.
+- **`RevealPhase` type deduplicated** — no longer redeclared in `usePresenterSounds.ts`; imports from `StagedReveal.tsx`.
+- **Bingo time column** uses `timeFormatter` so "847s" becomes "14:07".
+
+### Files
+- `traind-app/src/components/presenter/PresenterResultsSummary.tsx` — most of the work
+- `traind-app/src/components/ResultsErrorBoundary.tsx` — **NEW**
+- `traind-app/src/lib/pdfExport.ts` — boss-multiplier-aware `scorePct`
+- `traind-app/src/lib/awardCalculator.ts` — Photo Finish maxScore parameter
+- `traind-app/src/pages/SessionControl.tsx` — wires `ResultsErrorBoundary`, passes `maxScore` to award calculator
+- `traind-app/src/pages/AdminSessionDetails.tsx` — null-quiz guard, passes `maxScore`
+- `traind-app/src/pages/PlaySession.tsx` — answer-write retry
+- `traind-app/src/hooks/usePresenterSounds.ts` — imports `RevealPhase`
+- `traind-app/src/index.css` — `rsFadeDown`, `rsGlowPulse` keyframes
+- `traind-app/eslint.config.js` — `no-use-before-define` rule
+
+### Out of scope (flagged for future)
+- Full PlaySession answer-checkpoint refactor (write a complete `gameState` snapshot on completion)
+- Extract `scoreToPercentage` formula to `lib/scoring.ts` — currently duplicated 3 times
+- Boss questions aren't in active use, so the boss-related fixes (PDF pct, Photo Finish) are defensive
+
+---
+
 ## February 27, 2026 - Interstitial Animations Between Quiz Questions
 
 ### Feature: Animation Breaks
