@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Trophy, Medal, Users } from 'lucide-react'
 import type { Participant, Quiz } from '../../lib/firestore'
-import type { Award, AwardRecipient, AwardResults } from '../../lib/awardCalculator'
+import type { AwardRecipient, AwardResults } from '../../lib/awardCalculator'
 import { AvatarDisplay } from '../AvatarDisplay'
 
 type RevealStage = 'title' | 'podium' | 'awards' | 'leaderboard' | 'done'
@@ -49,24 +49,126 @@ function useCountUp(target: number, durationMs: number, active: boolean): number
 }
 
 // --- Leaderboard entry builder ---
-function buildLeaderboard(participants: Participant[], totalQ: number) {
-  return participants.slice().sort((a, b) => {
+// Quiz pct uses raw-score / maxScore so it agrees with the podium's `scoreFormatter`
+// (which accounts for boss multipliers). Bingo gets dedicated fields and a different sort.
+function buildLeaderboard(participants: Participant[], maxScore: number, isBingoSession: boolean) {
+  const sorted = participants.slice().sort((a, b) => {
+    if (isBingoSession) {
+      const wA = a.gameState?.gameWon ? 1 : 0
+      const wB = b.gameState?.gameWon ? 1 : 0
+      if (wB !== wA) return wB - wA
+      const cA = a.gameState?.cellsMarked || 0
+      const cB = b.gameState?.cellsMarked || 0
+      if (cB !== cA) return cB - cA
+      const tA = a.gameState?.timeToFirstBingo ?? a.gameState?.timeSpent ?? Infinity
+      const tB = b.gameState?.timeToFirstBingo ?? b.gameState?.timeSpent ?? Infinity
+      return tA - tB
+    }
     const sA = a.gameState?.score || a.finalScore || 0
     const sB = b.gameState?.score || b.finalScore || 0
     if (sB !== sA) return sB - sA
     const avgA = a.gameState?.answers?.length ? a.gameState.answers.reduce((s, x) => s + (x.timeSpent || 0), 0) / a.gameState.answers.length : 999
     const avgB = b.gameState?.answers?.length ? b.gameState.answers.reduce((s, x) => s + (x.timeSpent || 0), 0) / b.gameState.answers.length : 999
     return avgA - avgB
-  }).map((p, i) => {
+  })
+
+  return sorted.map((p, i) => {
     const rank = i + 1
+    const rawScore = p.gameState?.score || p.finalScore || 0
+    const scorePct = maxScore > 0 ? Math.round((rawScore / maxScore) * 100) : 0
     const answered = p.gameState?.answers?.length || 0
-    const correct = p.gameState?.answers?.filter(a => a.isCorrect).length || 0
-    const pct = answered > 0 ? Math.round((correct / totalQ) * 100) : 0
     const avgTime = answered > 0 ? Math.round((p.gameState?.answers?.reduce((s, a) => s + (a.timeSpent || 0), 0) || 0) / answered) : 0
     let best = 0, cur = 0
     ;(p.gameState?.answers || []).forEach(a => { if (a.isCorrect) { cur++; best = Math.max(best, cur) } else cur = 0 })
-    return { participant: p, rank, pct, avgTime, bestStreak: best }
+    return {
+      participant: p,
+      rank,
+      scorePct,
+      avgTime,
+      bestStreak: best,
+      // Bingo-only fields (zeroed for quiz sessions)
+      cellsMarked: p.gameState?.cellsMarked || 0,
+      totalCells: p.gameState?.totalCells || 25,
+      gameWon: !!p.gameState?.gameWon,
+      timeSpent: p.gameState?.timeToFirstBingo ?? p.gameState?.timeSpent ?? 0,
+    }
   })
+}
+
+// --- Podium column (full-width style) ---
+// Defined above the main component so it's in scope before its JSX usages.
+
+const PodiumColumn: React.FC<{
+  performer: AwardRecipient
+  rank: number
+  visible: boolean
+  scoreFormatter: (v: number | string) => string
+  maxHeight: number
+  compact: boolean
+}> = ({ performer, rank, visible, scoreFormatter, maxHeight, compact }) => {
+  const heightFractions: Record<number, number> = { 1: 0.78, 2: 0.55, 3: 0.4 }
+  const blockH = Math.round(maxHeight * heightFractions[rank])
+  const colW = rank === 1 ? (compact ? 180 : 220) : (compact ? 150 : 180)
+
+  const gradients: Record<number, string> = {
+    1: 'linear-gradient(to top, #b8860b, var(--gold-color, #fbbf24), #fde68a)',
+    2: 'linear-gradient(to top, #6b7280, var(--silver-color, #9ca3af), #e5e7eb)',
+    3: 'linear-gradient(to top, #92400e, var(--bronze-color, #d97706), #fbbf24)',
+  }
+
+  const glows: Record<number, string> = {
+    1: '0 -6px 40px rgba(251, 191, 36, 0.4), 0 0 60px rgba(251, 191, 36, 0.15)',
+    2: '0 -4px 25px rgba(156, 163, 175, 0.25)',
+    3: '0 -4px 25px rgba(217, 119, 6, 0.25)',
+  }
+
+  return (
+    <div
+      className="flex flex-col items-center"
+      style={{
+        width: colW,
+        opacity: visible ? 1 : 0,
+        transform: visible ? 'translateY(0)' : 'translateY(80px)',
+        transition: 'all 800ms cubic-bezier(0.34, 1.56, 0.64, 1)',
+      }}
+    >
+      {/* Trophy for #1 */}
+      {rank === 1 && (
+        <div style={{ animation: visible ? 'rsGlowPulse 2s ease-in-out infinite' : 'none' }} className="mb-1">
+          <Trophy size={compact ? 32 : 40} style={{ color: 'var(--gold-color, #fbbf24)' }} />
+        </div>
+      )}
+
+      {/* Name + score above block */}
+      <p
+        className={`${compact ? 'text-lg' : 'text-xl'} font-bold truncate w-full text-center mb-1`}
+        style={{ color: 'var(--text-color)' }}
+        title={performer.participantName}
+      >
+        {performer.participantName}
+      </p>
+      <p
+        className={`${compact ? 'text-base' : 'text-lg'} font-bold mb-2`}
+        style={{ color: rank === 1 ? 'var(--gold-color, #fbbf24)' : 'var(--primary-color)' }}
+      >
+        {scoreFormatter(performer.value)}
+      </p>
+
+      {/* Podium block */}
+      <div
+        className="w-full rounded-t-2xl flex items-center justify-center"
+        style={{
+          height: blockH,
+          background: gradients[rank],
+          boxShadow: glows[rank],
+        }}
+      >
+        <span className={`${compact ? 'text-4xl' : 'text-5xl'} font-bold text-white/90 drop-shadow-lg`}>
+          {rank === 1 ? '\u{1F947}' : rank === 2 ? '\u{1F948}' : '\u{1F949}'}
+        </span>
+      </div>
+    </div>
+  )
 }
 
 // --- Main component ---
@@ -89,8 +191,20 @@ export const PresenterResultsSummary: React.FC<Props> = ({
     timersRef.current = []
   }, [])
 
-  const totalQ = quiz?.questions.length || 1
-  const entries = useMemo(() => buildLeaderboard(participants, totalQ), [participants, totalQ])
+  // Max possible score, accounting for boss-question multipliers — same formula as
+  // SessionControl.scoreToPercentage so podium % and leaderboard % stay in sync.
+  const maxScore = useMemo(() => {
+    if (!quiz?.questions?.length) return 0
+    return quiz.questions.reduce((sum, q) => {
+      const multiplier = q.isBoss ? (q.bossPointMultiplier || 2) : 1
+      return sum + 100 * multiplier
+    }, 0)
+  }, [quiz])
+
+  const entries = useMemo(
+    () => buildLeaderboard(participants, maxScore, isBingoSession),
+    [participants, maxScore, isBingoSession]
+  )
   const hasPodium = entries.length > 0
 
   // Animated stats
@@ -293,6 +407,7 @@ export const PresenterResultsSummary: React.FC<Props> = ({
           <div className="flex gap-3 flex-wrap">
             {awardResults.awards.map((award, i) => {
               const primary = award.recipients[0]
+              if (!primary) return null
               const extra = award.recipients.length > 1 ? ` +${award.recipients.length - 1}` : ''
               const vis = i < awardsRevealed
               return (
@@ -342,8 +457,11 @@ export const PresenterResultsSummary: React.FC<Props> = ({
         {/* Leaderboard rows — auto-sized to fill space */}
         <div className="flex-1 overflow-y-auto space-y-1">
           {entries.map((e, i) => {
-            // Score bar width (visual indicator)
-            const barWidth = Math.max(e.pct, 2)
+            // Score bar: scorePct for quiz, % cells marked for bingo
+            const barPct = isBingoSession
+              ? (e.totalCells > 0 ? (e.cellsMarked / e.totalCells) * 100 : 0)
+              : e.scorePct
+            const barWidth = Math.max(barPct, 2)
 
             return (
               <div
@@ -379,7 +497,7 @@ export const PresenterResultsSummary: React.FC<Props> = ({
 
                 {/* Avatar + Name */}
                 <div className="relative flex items-center gap-3 flex-1 min-w-0">
-                  <AvatarDisplay avatar={(e.participant as any).avatar} size="sm" className="flex-shrink-0" />
+                  <AvatarDisplay avatar={e.participant.avatar} size="sm" className="flex-shrink-0" />
                   <span
                     className={`${nameSize} font-semibold truncate`}
                     style={{ color: 'var(--text-color)' }}
@@ -388,33 +506,65 @@ export const PresenterResultsSummary: React.FC<Props> = ({
                   </span>
                 </div>
 
-                {/* Score — prominent */}
-                <div className="relative w-24 text-right flex-shrink-0">
-                  <span
-                    className={`${scoreTextSize} font-bold tabular-nums`}
-                    style={{ color: e.rank === 1 ? 'var(--gold-color, #fbbf24)' : 'var(--primary-color)' }}
-                  >
-                    {e.pct}%
-                  </span>
-                </div>
+                {isBingoSession ? (
+                  <>
+                    {/* Bingo status: BINGO! or cells marked */}
+                    <div className="relative w-32 text-right flex-shrink-0">
+                      {e.gameWon ? (
+                        <span
+                          className={`${scoreTextSize} font-bold tabular-nums`}
+                          style={{ color: 'var(--gold-color, #fbbf24)' }}
+                        >
+                          BINGO!
+                        </span>
+                      ) : (
+                        <span
+                          className={`${scoreTextSize} font-bold tabular-nums`}
+                          style={{ color: 'var(--primary-color)' }}
+                        >
+                          {e.cellsMarked}/{e.totalCells}
+                        </span>
+                      )}
+                    </div>
 
-                {/* Time */}
-                <div className="relative w-16 text-right flex-shrink-0">
-                  <span className="text-base tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
-                    {e.avgTime}s
-                  </span>
-                </div>
+                    {/* Time spent (or time-to-bingo) */}
+                    <div className="relative w-20 text-right flex-shrink-0">
+                      <span className="text-base tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
+                        {e.timeSpent ? `${Math.round(e.timeSpent)}s` : '—'}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Score % — same source as podium scoreFormatter */}
+                    <div className="relative w-24 text-right flex-shrink-0">
+                      <span
+                        className={`${scoreTextSize} font-bold tabular-nums`}
+                        style={{ color: e.rank === 1 ? 'var(--gold-color, #fbbf24)' : 'var(--primary-color)' }}
+                      >
+                        {e.scorePct}%
+                      </span>
+                    </div>
 
-                {/* Streak */}
-                <div className="relative w-14 text-right flex-shrink-0">
-                  {e.bestStreak >= 3 ? (
-                    <span className="text-base" style={{ color: 'var(--streak-color, #f97316)' }}>
-                      {'\u{1F525}'}{e.bestStreak}
-                    </span>
-                  ) : (
-                    <span className="text-base" style={{ color: 'var(--text-secondary-color)' }}>—</span>
-                  )}
-                </div>
+                    {/* Avg answer time */}
+                    <div className="relative w-16 text-right flex-shrink-0">
+                      <span className="text-base tabular-nums" style={{ color: 'var(--text-secondary-color)' }}>
+                        {e.avgTime}s
+                      </span>
+                    </div>
+
+                    {/* Best streak */}
+                    <div className="relative w-14 text-right flex-shrink-0">
+                      {e.bestStreak >= 3 ? (
+                        <span className="text-base" style={{ color: 'var(--streak-color, #f97316)' }}>
+                          {'\u{1F525}'}{e.bestStreak}
+                        </span>
+                      ) : (
+                        <span className="text-base" style={{ color: 'var(--text-secondary-color)' }}>—</span>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             )
           })}
@@ -446,81 +596,6 @@ export const PresenterResultsSummary: React.FC<Props> = ({
           50% { filter: drop-shadow(0 0 16px var(--gold-color, #fbbf24)); }
         }
       `}</style>
-    </div>
-  )
-}
-
-// --- Podium column (full-width style) ---
-
-const PodiumColumn: React.FC<{
-  performer: AwardRecipient
-  rank: number
-  visible: boolean
-  scoreFormatter: (v: number | string) => string
-  maxHeight: number
-  compact: boolean
-}> = ({ performer, rank, visible, scoreFormatter, maxHeight, compact }) => {
-  const heightFractions: Record<number, number> = { 1: 0.78, 2: 0.55, 3: 0.4 }
-  const blockH = Math.round(maxHeight * heightFractions[rank])
-  const colW = rank === 1 ? (compact ? 180 : 220) : (compact ? 150 : 180)
-
-  const gradients: Record<number, string> = {
-    1: 'linear-gradient(to top, #b8860b, var(--gold-color, #fbbf24), #fde68a)',
-    2: 'linear-gradient(to top, #6b7280, var(--silver-color, #9ca3af), #e5e7eb)',
-    3: 'linear-gradient(to top, #92400e, var(--bronze-color, #d97706), #fbbf24)',
-  }
-
-  const glows: Record<number, string> = {
-    1: '0 -6px 40px rgba(251, 191, 36, 0.4), 0 0 60px rgba(251, 191, 36, 0.15)',
-    2: '0 -4px 25px rgba(156, 163, 175, 0.25)',
-    3: '0 -4px 25px rgba(217, 119, 6, 0.25)',
-  }
-
-  return (
-    <div
-      className="flex flex-col items-center"
-      style={{
-        width: colW,
-        opacity: visible ? 1 : 0,
-        transform: visible ? 'translateY(0)' : 'translateY(80px)',
-        transition: 'all 800ms cubic-bezier(0.34, 1.56, 0.64, 1)',
-      }}
-    >
-      {/* Trophy for #1 */}
-      {rank === 1 && (
-        <div style={{ animation: visible ? 'rsGlowPulse 2s ease-in-out infinite' : 'none' }} className="mb-1">
-          <Trophy size={compact ? 32 : 40} style={{ color: 'var(--gold-color, #fbbf24)' }} />
-        </div>
-      )}
-
-      {/* Name + score above block */}
-      <p
-        className={`${compact ? 'text-lg' : 'text-xl'} font-bold truncate w-full text-center mb-1`}
-        style={{ color: 'var(--text-color)' }}
-        title={performer.participantName}
-      >
-        {performer.participantName}
-      </p>
-      <p
-        className={`${compact ? 'text-base' : 'text-lg'} font-bold mb-2`}
-        style={{ color: rank === 1 ? 'var(--gold-color, #fbbf24)' : 'var(--primary-color)' }}
-      >
-        {scoreFormatter(performer.value)}
-      </p>
-
-      {/* Podium block */}
-      <div
-        className="w-full rounded-t-2xl flex items-center justify-center"
-        style={{
-          height: blockH,
-          background: gradients[rank],
-          boxShadow: glows[rank],
-        }}
-      >
-        <span className={`${compact ? 'text-4xl' : 'text-5xl'} font-bold text-white/90 drop-shadow-lg`}>
-          {rank === 1 ? '\u{1F947}' : rank === 2 ? '\u{1F948}' : '\u{1F949}'}
-        </span>
-      </div>
     </div>
   )
 }

@@ -18,6 +18,7 @@ import { generateDebugParticipants } from '../lib/debugData'
 import { type RevealPhase } from '../components/presenter/StagedReveal'
 import { PresenterResultsSummary } from '../components/presenter/PresenterResultsSummary'
 import { PresenterCanvas } from '../components/presenter/PresenterCanvas'
+import { ResultsErrorBoundary } from '../components/ResultsErrorBoundary'
 import { usePresenterSounds } from '../hooks/usePresenterSounds'
 import { AvatarDisplay } from '../components/AvatarDisplay'
 
@@ -957,22 +958,26 @@ export const SessionControl: React.FC = () => {
                   </div>
                 )}
 
-                {/* Results content — single-frame with staged reveal */}
+                {/* Results content — single-frame with staged reveal.
+                    Wrapped in an error boundary so a render bug shows a fallback
+                    instead of a blank projector in front of a live audience. */}
                 {resultsReady && (
-                  <PresenterResultsSummary
-                    key={debugRevealKey}
-                    participants={participants}
-                    quiz={quiz}
-                    isBingoSession={isBingoSession}
-                    awardResults={awardResults}
-                    sessionStats={sessionStats}
-                    scoreFormatter={scoreToPercentage}
-                    timeFormatter={(seconds) => isBingoSession ? formatTime(seconds) : `${seconds}s`}
-                    getAwardIcon={getAwardIcon}
-                    orgLogo={currentOrganization?.branding?.logo}
-                    orgName={currentOrganization?.name}
-                    onPhaseChange={(phase) => setRevealPhase(phase as RevealPhase)}
-                  />
+                  <ResultsErrorBoundary>
+                    <PresenterResultsSummary
+                      key={debugRevealKey}
+                      participants={participants}
+                      quiz={quiz}
+                      isBingoSession={isBingoSession}
+                      awardResults={awardResults}
+                      sessionStats={sessionStats}
+                      scoreFormatter={scoreToPercentage}
+                      timeFormatter={(seconds) => isBingoSession ? formatTime(seconds) : `${seconds}s`}
+                      getAwardIcon={getAwardIcon}
+                      orgLogo={currentOrganization?.branding?.logo}
+                      orgName={currentOrganization?.name}
+                      onPhaseChange={(phase) => setRevealPhase(phase as RevealPhase)}
+                    />
+                  </ResultsErrorBoundary>
                 )}
               </div>
             )}

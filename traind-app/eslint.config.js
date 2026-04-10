@@ -19,5 +19,17 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // Catch TDZ-style bugs where a `const`/`let` is referenced earlier in
+      // its own scope than it's declared. TypeScript's ts(2448) misses the
+      // in-function-body case (it lets you read a hoisted `const` from the
+      // top of the same function), so we need the lint rule to fill the gap.
+      // This would have caught the `entries`/`hasPodium` ordering bug.
+      'no-use-before-define': 'off',
+      '@typescript-eslint/no-use-before-define': [
+        'error',
+        { functions: false, classes: false, variables: true, enums: true, typedefs: false, ignoreTypeReferences: true },
+      ],
+    },
   },
 ])
