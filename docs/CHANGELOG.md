@@ -4,6 +4,20 @@ All completed milestones, bug fixes, and feature work. Most recent first.
 
 ---
 
+## April 16, 2026 — Mobile Connection Resilience
+
+Tenant "agross" reported participants getting "session timed out" errors on mobile devices during a quiz, forcing them to rejoin. Root cause: no Firestore offline persistence, all `onSnapshot` listeners lacked error callbacks (died silently on connection drops), and no tab-visibility recovery.
+
+### Changes
+
+- **`firebase.ts`**: Switched from `getFirestore(app)` to `initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) })`. Cached reads work during disconnects, answer writes queue and replay when online, `metadata.fromCache` enables staleness detection. Falls back to `getFirestore(app)` if IndexedDB unavailable (incognito).
+- **`firestore.ts`**: Added optional `onError` callback parameter to all 5 subscription methods (`subscribeToSession`, `subscribeToSessionParticipants`, `subscribeToParticipant`, `subscribeToSessionAnswers`, `subscribeToOrganization`). `subscribeToSession` now passes `{ includeMetadataChanges: true }` and forwards `fromCache` as a second callback argument.
+- **`timerSync.ts`**: Added error callback to RTDB `onValue` (prevents `waitForOffset()` from hanging if RTDB fails). Added `visibilitychange` listener that refreshes the server offset via one-shot `get()` when mobile tab resumes.
+- **`PlaySession.tsx`**: Added `connectionStale` state driven by `fromCache` metadata. Added `ConnectionBanner` component ("Reconnecting..." banner when data is stale). Added `visibilitychange` safety-net: one-shot `getSession()` when tab resumes — catches missed `status: 'completed'` transitions. Added `onError` callbacks to all subscription calls. Hardened kick detection: connection errors set `connectionStale` (not `isKicked`); when doc appears missing after recent disconnect, does confirmatory fresh read before treating as kick.
+- **`SessionControl.tsx`**, **`ParticipantResults.tsx`**, **`JoinSession.tsx`**: Added `onError` callbacks with `console.error` to all subscription calls.
+
+---
+
 ## April 10, 2026 — Presenter Results Hardening + Quiz Flow Recheck
 
 Multiple fixes shipped together after a "white screen on quiz completion" report. Started as a single TDZ fix and grew into a full pass over `PresenterResultsSummary` and the wider quiz path.
