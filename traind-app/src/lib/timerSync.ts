@@ -3,7 +3,7 @@
 // serverNow() returns the current server time regardless of device clock drift.
 // All timer anchors and elapsed calculations use serverNow() instead of Date.now().
 
-import { ref, onValue } from 'firebase/database'
+import { ref, onValue, get } from 'firebase/database'
 import { rtdb } from './firebase'
 
 let serverOffset = 0
@@ -19,7 +19,29 @@ onValue(offsetRef, (snapshot) => {
     readyCallbacks.forEach(cb => cb())
     readyCallbacks = []
   }
+}, (error) => {
+  // RTDB listener failed — resolve pending waiters with offset=0 (Date.now() fallback)
+  console.warn('RTDB server offset listener failed:', error)
+  if (!offsetReady) {
+    offsetReady = true
+    readyCallbacks.forEach(cb => cb())
+    readyCallbacks = []
+  }
 })
+
+// Refresh server offset when tab becomes visible again (mobile tab suspension recovery).
+// The onValue listener may have a stale offset after the tab was backgrounded.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      get(offsetRef).then((snapshot) => {
+        serverOffset = snapshot.val() || 0
+      }).catch(() => {
+        // Best-effort — existing offset is still usable
+      })
+    }
+  })
+}
 
 /**
  * Returns current server time in ms, corrected for device clock drift.

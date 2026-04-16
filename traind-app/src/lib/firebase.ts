@@ -1,7 +1,7 @@
 // Firebase configuration for multi-tenant SaaS platform
 import { initializeApp } from 'firebase/app'
 import { getAuth, connectAuthEmulator } from 'firebase/auth'
-import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator, type Firestore } from 'firebase/firestore'
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions'
 import { getStorage } from 'firebase/storage'
 import { getDatabase } from 'firebase/database'
@@ -26,7 +26,23 @@ const app = initializeApp(firebaseConfig)
 
 // Initialize services
 export const auth = getAuth(app)
-export const db = getFirestore(app)
+
+// Enable Firestore offline persistence — cached reads during disconnects,
+// queued writes that replay when online, and metadata.fromCache for staleness detection.
+// persistentMultipleTabManager supports trainer's popup presenter window + main tab.
+let db: Firestore
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  })
+} catch {
+  // Persistence unavailable (incognito, or already initialized via HMR) — use default
+  console.warn('Persistent Firestore cache unavailable, using default')
+  db = getFirestore(app)
+}
+export { db }
 export const functions = getFunctions(app)
 export const storage = getStorage(app)
 export const rtdb = getDatabase(app)

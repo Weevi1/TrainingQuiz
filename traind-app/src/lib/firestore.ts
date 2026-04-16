@@ -684,7 +684,8 @@ export class FirestoreService {
   // Real-time subscriptions
   static subscribeToOrganization(
     orgId: string,
-    callback: (org: Organization | null) => void
+    callback: (org: Organization | null) => void,
+    onError?: (error: Error) => void
   ): () => void {
     return onSnapshot(getOrganizationDoc(orgId), (doc) => {
       if (doc.exists()) {
@@ -697,14 +698,15 @@ export class FirestoreService {
       } else {
         callback(null)
       }
-    })
+    }, onError)
   }
 
   static subscribeToSession(
     sessionId: string,
-    callback: (session: GameSession | null) => void
+    callback: (session: GameSession | null, fromCache?: boolean) => void,
+    onError?: (error: Error) => void
   ): () => void {
-    return onSnapshot(getSessionDoc(sessionId), (doc) => {
+    return onSnapshot(getSessionDoc(sessionId), { includeMetadataChanges: true }, (doc) => {
       if (doc.exists()) {
         callback({
           id: doc.id,
@@ -712,11 +714,11 @@ export class FirestoreService {
           createdAt: doc.data().createdAt?.toDate(),
           startTime: doc.data().startTime?.toDate(),
           endTime: doc.data().endTime?.toDate()
-        } as GameSession)
+        } as GameSession, doc.metadata.fromCache)
       } else {
-        callback(null)
+        callback(null, doc.metadata.fromCache)
       }
-    })
+    }, onError)
   }
 
   // Quiz operations (organization-scoped)
@@ -865,7 +867,8 @@ export class FirestoreService {
 
   static subscribeToSessionParticipants(
     sessionId: string,
-    callback: (participants: Participant[]) => void
+    callback: (participants: Participant[]) => void,
+    onError?: (error: Error) => void
   ): () => void {
     const participantsQuery = query(
       getSessionSubcollection(sessionId, 'participants'),
@@ -879,7 +882,7 @@ export class FirestoreService {
         joinedAt: doc.data().joinedAt?.toDate()
       })) as Participant[]
       callback(participants)
-    })
+    }, onError)
   }
 
   // Remove participant (kick functionality)
@@ -900,7 +903,8 @@ export class FirestoreService {
   static subscribeToParticipant(
     sessionId: string,
     participantId: string,
-    callback: (exists: boolean, participant?: Participant) => void
+    callback: (exists: boolean, participant?: Participant) => void,
+    onError?: (error: Error) => void
   ): () => void {
     const participantRef = doc(db, getCollectionName('sessions'), sessionId, 'participants', participantId)
 
@@ -914,7 +918,7 @@ export class FirestoreService {
       } else {
         callback(false)
       }
-    })
+    }, onError)
   }
 
   // Update session timer (broadcaster pattern - trainer is authoritative)
@@ -969,7 +973,8 @@ export class FirestoreService {
   // Subscribe to session answers (for live tracking)
   static subscribeToSessionAnswers(
     sessionId: string,
-    callback: (answers: any[]) => void
+    callback: (answers: any[]) => void,
+    onError?: (error: Error) => void
   ): () => void {
     const answersQuery = query(
       getSessionSubcollection(sessionId, 'answers'),
@@ -983,7 +988,7 @@ export class FirestoreService {
         answeredAt: doc.data().answeredAt?.toDate()
       }))
       callback(answers)
-    })
+    }, onError)
   }
 
   // Mark participant as completed

@@ -171,7 +171,8 @@ export const ParticipantResults: React.FC = () => {
           }
           setSessionCompleted(true)
         }
-      }
+      },
+      (error) => console.error('ParticipantResults: session subscription error:', error)
     )
 
     return () => unsubscribe()

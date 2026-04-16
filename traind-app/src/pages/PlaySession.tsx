@@ -18,6 +18,20 @@ import { getOrganizationCached } from '../lib/orgCache'
 const SESSION_STORAGE_KEY = 'traind_session_recovery'
 const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000 // 2 hours
 
+/** Fixed banner shown when Firestore data is from cache (participant offline/reconnecting) */
+const ConnectionBanner: React.FC<{ visible: boolean }> = ({ visible }) => {
+  if (!visible) return null
+  return (
+    <div
+      className="fixed top-0 left-0 right-0 z-[9999] flex items-center justify-center gap-2 py-2 px-4 text-sm font-medium"
+      style={{ backgroundColor: 'rgba(245, 158, 11, 0.95)', color: '#ffffff' }}
+    >
+      <Loader className="animate-spin" size={14} />
+      Reconnecting...
+    </div>
+  )
+}
+
 /** Preload all quiz media into browser cache during waiting room */
 const preloadQuizMedia = (quiz: Quiz) => {
   const preloadVideo = (url: string) => {
@@ -100,6 +114,7 @@ export const PlaySession: React.FC = () => {
   const [participantId, setParticipantId] = useState<string | null>(sessionState?.participantId || null)
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [participantCount, setParticipantCount] = useState(0)
+  const [connectionStale, setConnectionStale] = useState(false)
 
   // Pre-cache quiz data during waiting room for instant start
   const quizCacheRef = useRef<Quiz | null>(null)
@@ -170,7 +185,10 @@ export const PlaySession: React.FC = () => {
 
     const unsubscribe = FirestoreService.subscribeToSession(
       sessionState.sessionId,
-      (updatedSession) => {
+      (updatedSession, fromCache) => {
+        // Track connection staleness from cache metadata
+        setConnectionStale(!!fromCache)
+
         if (updatedSession) {
           setSession(updatedSession)
 
@@ -179,6 +197,10 @@ export const PlaySession: React.FC = () => {
             loadQuizData(updatedSession)
           }
         }
+      },
+      (error) => {
+        console.error('Session subscription error:', error)
+        setConnectionStale(true)
       }
     )
 
@@ -196,11 +218,37 @@ export const PlaySession: React.FC = () => {
       sessionState.sessionId,
       (participants) => {
         setParticipantCount(participants.length)
-      }
+      },
+      (error) => console.error('Participants subscription error:', error)
     )
 
     return () => unsubscribe()
   }, [sessionState?.sessionId, session?.status])
+
+  // Visibility-change safety net: when mobile tab resumes, do a one-shot fetch
+  // to catch any session state changes missed while the tab was backgrounded
+  useEffect(() => {
+    if (!sessionState?.sessionId) return
+
+    const handleVisibilityChange = async () => {
+      if (document.hidden) return
+      try {
+        const freshSession = await FirestoreService.getSession(sessionState.sessionId)
+        if (freshSession) {
+          setSession(freshSession)
+          // If session ended while tab was hidden, load quiz data so results can render
+          if (freshSession.status === 'active' && !gameDataRef.current) {
+            loadQuizData(freshSession)
+          }
+        }
+      } catch (error) {
+        console.warn('Visibility-change session refresh failed:', error)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [sessionState?.sessionId])
 
   const loadSessionData = async () => {
     if (!sessionState) return
@@ -419,6 +467,8 @@ export const PlaySession: React.FC = () => {
   // Waiting state - show waiting room while trainer hasn't started
   if (session && session.status === 'waiting') {
     return (
+      <>
+      <ConnectionBanner visible={connectionStale} />
       <div
         className="min-h-screen flex items-center justify-center relative overflow-hidden"
         style={{
@@ -520,6 +570,7 @@ export const PlaySession: React.FC = () => {
           </div>
         </div>
       </div>
+      </>
     )
   }
 
@@ -586,6 +637,8 @@ export const PlaySession: React.FC = () => {
     participantId={participantId || ''}
     organization={organization}
     reactions={organization?.branding?.reactions}
+    connectionStale={connectionStale}
+    setConnectionStale={setConnectionStale}
   />
 }
 
@@ -597,8 +650,10 @@ const LegacyQuizGame: React.FC<{
   onGameComplete: (score: number, additionalData?: any) => void
   participantId: string
   organization: Organization | null
+  connectionStale: boolean
+  setConnectionStale: (stale: boolean) => void
   reactions?: OrganizationBranding['reactions']
-}> = ({ session, gameData, sessionState, onGameComplete, participantId, organization, reactions }) => {
+}> = ({ session, gameData, sessionState, onGameComplete, participantId, organization, reactions, connectionStale, setConnectionStale }) => {
   const navigate = useNavigate()
   const quiz = gameData.quiz as Quiz
   // Session time limit: prefer the value written by presenter to Firestore, fall back to calculation
@@ -692,26 +747,43 @@ const LegacyQuizGame: React.FC<{
   }, [])
 
   // Kick detection - subscribe to participant document
+  const connectionStaleRef = useRef(connectionStale)
+  useEffect(() => { connectionStaleRef.current = connectionStale }, [connectionStale])
+
   useEffect(() => {
     if (!sessionState.sessionId || !participantId) return
+
+    const handleKick = async () => {
+      // If we were recently disconnected, confirm with a fresh read before treating as kick.
+      // Prevents false "removed" messages when the listener reconnects with stale cache.
+      if (connectionStaleRef.current) {
+        try {
+          const fresh = await FirestoreService.getSessionParticipants(sessionState.sessionId)
+          if (fresh.some(p => p.id === participantId)) return // Still exists — false alarm
+        } catch {
+          // Can't confirm — don't kick on uncertainty
+          return
+        }
+      }
+
+      setIsKicked(true)
+      soundSystem.play('incorrect')
+      localStorage.removeItem(SESSION_STORAGE_KEY)
+      setTimeout(() => {
+        navigate('/join', { state: { kicked: true } })
+      }, 3000)
+    }
 
     const unsubscribe = FirestoreService.subscribeToParticipant(
       sessionState.sessionId,
       participantId,
-      (exists, participant) => {
-        if (!exists) {
-          // Participant was removed (kicked)
-          setIsKicked(true)
-          soundSystem.play('incorrect')
-
-          // Clear session recovery data
-          localStorage.removeItem(SESSION_STORAGE_KEY)
-
-          // Redirect after showing message
-          setTimeout(() => {
-            navigate('/join', { state: { kicked: true } })
-          }, 3000)
-        }
+      (exists) => {
+        if (!exists) handleKick()
+      },
+      (error) => {
+        // Connection error — do NOT treat as kick, just mark stale
+        console.error('Participant subscription error:', error)
+        setConnectionStale(true)
       }
     )
 
@@ -724,7 +796,10 @@ const LegacyQuizGame: React.FC<{
 
     const unsubscribe = FirestoreService.subscribeToSession(
       sessionState.sessionId,
-      (updatedSession) => {
+      (updatedSession, fromCache) => {
+        // Track connection staleness from cache metadata
+        setConnectionStale(!!fromCache)
+
         if (!updatedSession || sessionEndedRef.current) return
 
         // Check if session ended by trainer
@@ -761,10 +836,48 @@ const LegacyQuizGame: React.FC<{
           timerPausedRef.current = false
           setIsSessionPaused(false)
         }
+      },
+      (error) => {
+        console.error('Session subscription error (LegacyQuizGame):', error)
+        setConnectionStale(true)
       }
     )
 
     return () => unsubscribe()
+  }, [sessionState.sessionId])
+
+  // Visibility-change safety net: when mobile tab resumes during active quiz,
+  // do a one-shot session fetch to catch missed status changes
+  useEffect(() => {
+    if (!sessionState.sessionId || sessionEndedRef.current) return
+
+    const handleVisibilityChange = async () => {
+      if (document.hidden || sessionEndedRef.current) return
+      try {
+        const freshSession = await FirestoreService.getSession(sessionState.sessionId)
+        if (!freshSession || sessionEndedRef.current) return
+
+        // If session ended while tab was hidden, trigger end flow
+        if (freshSession.status === 'completed' && !sessionEndedRef.current) {
+          sessionEndedRef.current = true
+          setSessionEnded(true)
+          showFinalResults()
+        }
+
+        // Sync timer anchor + pause state from fresh data
+        if (freshSession.timerStartedAt) {
+          sessionTimerAnchorRef.current = freshSession.timerStartedAt
+        }
+        if (freshSession.sessionTimeLimit) {
+          sessionTimeLimitRef.current = freshSession.sessionTimeLimit
+        }
+      } catch (error) {
+        console.warn('Visibility-change session refresh failed (quiz):', error)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [sessionState.sessionId])
 
   // Live stats - poll participants every 10s for ranking (avoids N×N listener reads)
@@ -1305,6 +1418,7 @@ const LegacyQuizGame: React.FC<{
 
   return (
     <div className="min-h-screen relative" style={{ backgroundColor: 'var(--background-color)' }}>
+      <ConnectionBanner visible={connectionStale} />
       {/* Interstitial animation overlay */}
       {showInterstitial && (
         <InterstitialOverlay

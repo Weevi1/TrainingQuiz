@@ -77,7 +77,8 @@ export const JoinSession: React.FC = () => {
 
         previousParticipantCountRef.current = mappedParticipants.length
         setParticipants(mappedParticipants)
-      }
+      },
+      (error) => console.error('JoinSession: participants subscription error:', error)
     )
 
     return () => unsubscribe()

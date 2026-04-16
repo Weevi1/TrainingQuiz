@@ -239,7 +239,7 @@ export const SessionControl: React.FC = () => {
       } else if (updatedSession.status === 'completed') {
         setIsTimerRunning(false)
       }
-    })
+    }, (error) => console.error('SessionControl: session subscription error:', error))
 
     return unsubscribe
   }, [sessionId, loading])
@@ -263,7 +263,8 @@ export const SessionControl: React.FC = () => {
         previousParticipantCount.current = newParticipants.length
         setParticipants(newParticipants)
         updateSessionStats(newParticipants)
-      }
+      },
+      (error) => console.error('SessionControl: participants subscription error:', error)
     )
 
     return unsubscribe
